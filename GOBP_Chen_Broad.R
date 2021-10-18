@@ -20,7 +20,7 @@ colnames(m) <- anno$Cell_origin
 # Updating to current Symbol for more accurate clusterProfiler results
 d$genes <- checkGeneSymbols(d$genes)$Suggested.Symbol
 
-# We only want to query genes associated with broad genes,ie with peak > 4000bp
+# We only want to query genes associated with broad peaks,ie with peak around TSS > 4000bp
 m <- m > 4000 
 
 broad_genes <- apply(
