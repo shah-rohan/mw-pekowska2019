@@ -51,15 +51,14 @@ dc <- reshape2::dcast(
 )
 
 col_fun = colorRamp2(
-  c(1, 2, 30),
+  c(1      , 2    , 30),
   c("white", "red", "red4")
 )
 dm <- -log10(as.matrix(dc[,-1]))
 rownames(dm) <- dc[,1]
 dm[is.na(dm)] <- 0
 
-#max_dm <- apply(dm, 2, max)
-# We want to keep ontologie elements that have the lowest p-value in at least one of the samples
+# We want to keep ontology elements that have the lowest p-value in at least one of the samples
 max_dm <- apply(
   dm, 
   2, 
@@ -82,10 +81,9 @@ Heatmap(
   cluster_rows = FALSE,
   heatmap_legend_param = list(
     col_fun = col_fun,
-    title = "-log10(p-value),",
-    at = c(1, 2, 30),
+    title = "-log10(p-value)",
+    at     = c(1   , 2  , 30),
     labels = c("<2", "2", ">30")
-    #break_dist = 1
   ),
   bottom_annotation = HeatmapAnnotation(
     df = data.frame(anno[, anno_cols_to_display])
