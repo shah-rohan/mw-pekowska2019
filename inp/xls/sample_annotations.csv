@@ -1,0 +1,42 @@
+Chen2015_sample_name,Project_source,Antibody,Cell_origin
+Roadmap_BI.Mobilized_CD34_Primary_Cells_UW_RO_01549,Roadmap,Millipore #07-473 (abMe3-2),CD34
+Encode_normal_Sydh_Pbmc_bUcd_Rep1,Encode,CST #9751 (abMe3-11),Pbmc
+Roadmap_BI.CD15_Primary_Cells_23,Roadmap,Millipore #07-473 (abMe3-2),CD15
+Roadmap_BI.CD3_Primary_Cells_CD3_39804,Roadmap,Abcam #ab8580 (abMe3-1),CD3
+Roadmap_UCSF.UBC.Brain_Germinal_Matrix_HuFGM01,Roadmap,CST #9751 (abMe3-11),Brain
+Roadmap_UCSF.UBC.Fetal_Brain_HuFNSC01,Roadmap,CST #9751 (abMe3-11),Fetal Brain
+Roadmap_BI.Adult_Liver_4,Roadmap,Millipore #07-473 (abMe3-2),Liver
+Roadmap_BI.Pancreatic_Islets_pancreatic_islets_normal_3_27_09,Roadmap,Abcam #ab8580 (abMe3-1),Pancreatic Islets
+Roadmap_BI.Adult_Kidney_153,Roadmap,Millipore #07-473 (abMe3-2),Kidney
+Roadmap_BI.Duodenum_Mucosa_61,Roadmap,Millipore #07-473 (abMe3-2),Duodenum
+Encode_normal_Broad_Nhek_Std_Rep3,Encode,Millipore #07-473 (abMe3-2),Nhek (keratinocytes)
+Roadmap_BI.Rectal_Mucosa_31,Roadmap,Millipore #07-473 (abMe3-2),Rectal Mucosa
+Encode_normal_Broad_Hmec_Std_Rep1,Encode,Millipore #07-473 (abMe3-2),HMEC_Broad
+Encode_normal_Uw_Hmec_Std_Rep1,Encode,CST #9751 (abMe3-11),HMEC_UW
+Encode_normal_Uw_Ag04450_Std_Rep2,Encode,CST #9751 (abMe3-11),Ag04450 (fetal lung)
+Encode_normal_Uw_Hcm_Std_Rep1,Encode,CST #9751 (abMe3-11),Hcm (cardiac myoc.)
+Encode_normal_Broad_Huvec_Std_Rep2,Encode,Millipore #07-473 (abMe3-2),HUVEC_Broad
+Encode_normal_Uw_Huvec_Std_Rep2,Encode,CST #9751 (abMe3-11),HUVEC_UW
+Encode_normal_Broad_Osteo_Rep3,Encode,Abcam #ab8580 (abMe3-1),Osteoblast
+Roadmap_BI.Skeletal_Muscle_19,Roadmap,Millipore #07-473 (abMe3-2),Skeletal Muscle
+Encode_cancer_Broad_Dnd41_Rep2,Encode,Abcam #ab8580 (abMe3-1),Dnd41
+Encode_cancer_Uw_Jurkat_Std_Rep1,Encode,CST #9751 (abMe3-11),Jurkat
+Encode_cancer_Uw_Hl60_Std_Rep2,Encode,CST #9751 (abMe3-11),HL-60
+Encode_cancer_Uw_Be2c_Std_Rep2,Encode,CST #9751 (abMe3-11),Be2c
+Encode_cancer_Uw_Sknmc_Std_Rep2,Encode,CST #9751 (abMe3-11),Sknmc
+Encode_cancer_Uw_Panc1_Std_Rep1,Encode,CST #9751 (abMe3-11),Panc1
+Encode_cancer_Uw_Mcf7_Std_Rep2,Encode,CST #9751 (abMe3-11),Mcf7
+Encode_cancer_Uw_Caco2_Std_Rep1,Encode,CST #9751 (abMe3-11),Caco2
+Encode_cancer_Uw_Werirb1_Std_Rep1,Encode,CST #9751 (abMe3-11),Werirb1
+Encode_cancer_Sydh_Nt2d1_bUcd_Rep2,Encode,CST #9751 (abMe3-11),Nt2d1
+Encode_cancer_Uw_Hct116_Std_Rep1,Encode,CST #9751 (abMe3-11),Hct116
+Encode_cancer_Uw_Hek293_Std_Rep2,Encode,CST #9751 (abMe3-11),Hek293
+Encode_cancer_Broad_A549_Dex100nm_Rep1,Encode,Millipore #07-473 (abMe3-2),A549_Broad
+Encode_cancer_Uw_A549_Std_Rep1,Encode,CST #9751 (abMe3-11),A549_UW
+Encode_cancer_Broad_Hepg2_Std_Rep2,Encode,Millipore #07-473 (abMe3-2),Hepg2
+Encode_cancer_Uw_Nb4_Std_Rep1,Encode,CST #9751 (abMe3-11),Nb4
+Encode_cancer_Uw_Lncap_Std_Rep1,Encode,CST #9751 (abMe3-11),Lncap
+Encode_cancer_Broad_Helas3_Std_Rep2,Encode,Abcam #ab8580 (abMe3-1),HelaS3
+Encode_cancer_Broad_K562_Std_Rep2,Encode,Millipore #07-473 (abMe3-2),K562_Broad
+Encode_cancer_Uw_K562_Std_Rep2,Encode,CST #9751 (abMe3-11),K562_UW
+Encode_cancer_Sydh_K562_bUcd_Rep2,Encode,CST #9751 (abMe3-11),K562_SYDH

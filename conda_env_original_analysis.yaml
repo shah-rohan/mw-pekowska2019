@@ -1,0 +1,13 @@
+name:
+  r_pekowska2019_original_analysis
+channels:
+  - conda-forge
+  - bioconda
+  - defaults
+dependencies:
+  - bioconductor-org.hs.eg.db == 3.5
+  - bioconductor-clusterprofiler
+  - bioconductor-complexheatmap
+  - r-readxl
+  - r-reshape2
+  - r-circlize

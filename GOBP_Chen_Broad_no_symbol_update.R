@@ -2,12 +2,14 @@
 library(clusterProfiler)
 library(org.Hs.eg.db)
 library(readxl)
-library(HGNChelper)
+#library(HGNChelper)
 library(reshape2)
 library(ComplexHeatmap)
 library(circlize)
 
-outprefix <- "GOBP_Chen_Broad"
+# By the time of the initial analysis (2018-10-05), HGNCHelper was not available (Published: 2019-10-24)
+# Differences in output with and without symbol update are minor anyways.
+outprefix <- "GOBP_Chen_Broad_no_symbol_update"
 
 # Input data from:
 # https://static-content.springer.com/esm/art%3A10.1038%2Fng.3385/MediaObjects/41588_2015_BFng3385_MOESM25_ESM.xls
@@ -21,7 +23,7 @@ colnames(m) <- anno$Cell_origin
 
 # Some Symbols are outdated since Chen2015 publication.
 # Updating to current Symbol for more accurate clusterProfiler results
-d$genes <- checkGeneSymbols(d$genes)$Suggested.Symbol
+#d$genes <- checkGeneSymbols(d$genes)$Suggested.Symbol
 
 # We only want to query genes associated with broad peaks,ie with peak around TSS > 4000bp
 m <- m > 4000 
@@ -82,7 +84,6 @@ max_dm <- apply(
     x == max(x)
   }
 )
-
 dm <- dm[rowSums(max_dm) > 0,]
 dm <- dm[
   do.call(
@@ -116,7 +117,6 @@ Heatmap(
   )
 )
 dev.off()
-
 
 # Alternative filtering where only the best GO term by sample is kept
 dm <- apply(
