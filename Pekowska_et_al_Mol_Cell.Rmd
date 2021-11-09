@@ -75,15 +75,16 @@ goterms <- Term(GOTERM)
 
 
 wdir <- getwd()
-peak_dir <- file.path(wdir, "peaks")
-wig_dir <- file.path(wdir, "bigWigs")
-objects <- file.path(wdir, "objects")
-figures <- file.path(wdir, "figures")
-source <- file.path(wdir, "source")
+peak_dir <- file.path(wdir, "peaks/")
+wig_dir <- file.path(wdir, "bigWigs/")
+objects <- file.path(wdir, "objects/")
+figures <- file.path(wdir, "figures/")
+source <- file.path(wdir, "source/")
 
 dir.create(peak_dir)
 dir.create(wig_dir)
 dir.create(objects)
+dir.create(figures)
 
 # Default timeout (60) leads to the interruption of large bigwig files.
 # Depending on your connection speed, you may need higher values (untested).
@@ -673,7 +674,8 @@ thisReg_me3_peaks1 <- AnnotationTrack(
   fontfamily = "Arial"
 )
 
-thisReg_enhancers <- AnnotationTrack(distal_enhancers_ncbi,
+thisReg_enhancers <- AnnotationTrack(
+  distal_enhancers_ncbi,
   genome = "hg38",
   name = "Distal Enhancers",
   chromosome = thechr,
@@ -1930,7 +1932,6 @@ write.table(
 ```
 
 
-
 ### B cells
 
 Here the profiles were obtained using the ab7766 antibody.
@@ -2778,7 +2779,6 @@ create_results_table <- function(
 
 
 ```{r focusClusterHigh}
-
 load(file.path(objects, "ENSEMBL_genes_for_Average_profiles.Rdata")) #
 load(file.path(objects, "H3K4me2_profiles_filtered.RData")) #
 load(file.path(objects, "Shah_H3K4me2_clustering.RData"))
@@ -2792,14 +2792,15 @@ cluster_choice <- list()
 
 # Depending on seed, the "High" cluster may change.
 # Here we select it based on the median value by cluster
-# in the 100th bin (could be also done for other bins in 3').
+# in the 50th bin. Most other bin around this one could also work.
+# Bins farther in 3' work well too, except for Encode rep2.
 findClusterHigh <- function(
   clustering_res,
   pattern 
 ) {
   med_signal_3p <- list()
   for (n_cluster in unique(clustering_res$cluster)) {
-    med_signal_3p[[n_cluster]] <- median(
+    med_signal_3p[[n_cluster]] <- mean(
       pattern[
         clustering_res$cluster == n_cluster,
         100
@@ -2836,7 +2837,7 @@ cluster_choice <- list(
   )
 )
 
-
+cluster_choice
 # cluster_choice <- c(
 #   me2_Shah_pattern = 1,
 #   me2_best_pattern = 5,
@@ -2929,16 +2930,54 @@ Using terms identified as within the top 4 terms in at least one sample, retriev
 
 
 ```{r, FigureS1_panelB_GO, fig.width=8, fig.height=8, out.width='50%', fig.align='center', dev.args=list(pointsize=15),fig.path=figures, dev=c('png', 'pdf')}
+load(
+  file.path(
+    objects,
+    "ENSEMBL_genes_for_Average_profiles.Rdata"
+  )
+)
+load(
+  file.path(
+    objects,
+    "H3K4me2_profiles_filtered.RData"
+  )
+)
 
-
-load(file.path(objects, "ENSEMBL_genes_for_Average_profiles.Rdata"))
-load(file.path(objects, "H3K4me2_profiles_filtered.RData"))
-
-shah_table_high <- read.delim(file.path(objects, "shah_table_high.txt"), as.is = TRUE)
-shah_bestAb <- read.delim(file.path(objects, "shah_bestAb_high.txt"), as.is = TRUE)
-HMD_Shah <- read.delim(file.path(objects, "HMD_Shah_high.txt"), as.is = TRUE)
-encode_table2 <- read.delim(file.path(objects, "encode_table2_high.txt"), as.is = TRUE)
-Bcell_table <- read.delim(file.path(objects, "Bcell_table_high.txt"), as.is = TRUE)
+shah_table_high <- read.delim(
+  file.path(
+    objects,
+    "shah_table_high.txt"
+  ),
+  as.is = TRUE
+)
+shah_bestAb <- read.delim(
+  file.path(
+    objects,
+    "shah_bestAb_high.txt"
+  ),
+  as.is = TRUE
+)
+HMD_Shah <- read.delim(
+  file.path(
+    objects,
+    "HMD_Shah_high.txt"
+  ),
+  as.is = TRUE
+)
+encode_table2 <- read.delim(
+  file.path(
+    objects,
+    "encode_table2_high.txt"
+  ),
+  as.is = TRUE
+)
+Bcell_table <- read.delim(
+  file.path(
+    objects,
+    "Bcell_table_high.txt"
+  ),
+  as.is = TRUE
+)
 
 getTopGO <- function(tb, topTerms) {
   # tb=HMD_Shah; topTerms=4
@@ -2947,9 +2986,6 @@ getTopGO <- function(tb, topTerms) {
   names(res) <- tbb[, "GO_name"]
   return(res)
 }
-
-
-cluster_choice
 
 go_termsII <- (c(
   getTopGO(HMD_Shah, 4),
@@ -2978,8 +3014,6 @@ HMD_Shah <- create_results_table(
   GO_terms = go_termsII
 )
 
-
-
 encode_table2 <- create_results_table(
   clustering_res = clusters_encode2,
   pattern = me2_encode_pattern2,
@@ -2987,7 +3021,6 @@ encode_table2 <- create_results_table(
   ENSG = ensg,
   GO_terms = go_termsII
 )
-
 
 Bcell_table <- create_results_table(
   clustering_res = clusters_bcell,
@@ -2997,9 +3030,6 @@ Bcell_table <- create_results_table(
   GO_terms = go_termsII
 )
 
-
-
-
 getGOnames <- function(id_list, mappings) {
   # id_list=Bcell_table; mappings=goterms
   x <- as.data.frame(id_list)
@@ -3007,7 +3037,6 @@ getGOnames <- function(id_list, mappings) {
   x$GO_name <- mappings[match(rownames(x), names(mappings))]
   return(x)
 }
-
 
 shah_bestAb1 <- getGOnames(shah_bestAb, goterms)
 HMD_Shah1 <- getGOnames(HMD_Shah, goterms)
@@ -3047,24 +3076,38 @@ rownames(resMatrix_cut) <- rownames(resMatrix)
 colnames(resMatrix_cut) <- colnames(resMatrix)
 
 
-par(mar = c(10, 25, 1, 1), mfrow = c(1, 1))
-image(1:4, 1:nrow(resMatrix_cut),
+par(
+  mar = c(10, 25, 1, 1),
+  mfrow = c(1, 1)
+)
+image(
+  1:4,
+  1:nrow(resMatrix_cut),
   t(resMatrix_cut),
-  axes = FALSE, xlab = "", ylab = "",
+  axes = FALSE,
+  xlab = "",
+  ylab = "",
   col = colorRampPalette(c("white", "red"))(12)
 )
-box(col = "black", lwd = 2)
-axis(1,
-  at = 1:4, c(
+box(
+  col = "black",
+  lwd = 2
+)
+axis(
+  1,
+  at = 1:4,
+  c(
     "Shah et al., Thermo",
     "Shah et al., HMD",
     "Encode K562", "Encode B cell"
   ),
   las = 2
 )
-axis(2,
+axis(
+  2,
   at = 1:nrow(resMatrix_cut),
-  rownames(resMatrix_cut), las = 1
+  rownames(resMatrix_cut),
+  las = 1
 )
 box(col = "black")
 ```
@@ -3080,4 +3123,8 @@ image(0:length(c(1:14)), 0:1,
 )
 box(col = "black", lwd = 2)
 axis(1, at = c(1:14))
+```
+
+```{r sessionInfo}
+sessionInfo()
 ```
