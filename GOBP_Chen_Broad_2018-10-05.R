@@ -21,7 +21,7 @@ d <- read.table(
   check.names = TRUE
 )
 
-# Annotations manually gathered by Salvatore Spicuglia
+# Annotations for representative samples from each tissue/cell line were manually gathered
 anno <- read.csv("inp/xls/sample_annotations.csv")
 
 m <- as.matrix(

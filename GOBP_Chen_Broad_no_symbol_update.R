@@ -15,7 +15,7 @@ outprefix <- "GOBP_Chen_Broad_no_symbol_update"
 # https://static-content.springer.com/esm/art%3A10.1038%2Fng.3385/MediaObjects/41588_2015_BFng3385_MOESM25_ESM.xls
 d <- read_xls("inp/xls/chen2015/ng.3385-S4.xls")
 names(d) <- make.names(names(d))
-# Annotations manually gathered by Salvatore Spicuglia
+# Annotations for representative samples from each tissue/cell line were manually gathered
 anno <- read_xls("inp/xls/sample_annotations.xls")
 
 m <- as.matrix(d[,anno$Chen2015_sample_name])

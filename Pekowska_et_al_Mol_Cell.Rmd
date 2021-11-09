@@ -1,0 +1,3083 @@
+---
+title: "H3K4 methylation at broad promoters and enhancers"
+author: "Aleksandra Pekowska"
+output:
+  html_document:
+    highlight: tango
+    theme: flatly
+    toc: yes
+    toc_depth: 3
+  pdf_document:
+    toc: yes
+    toc_depth: '3'
+---
+
+<style type="text/css">
+
+h1.title {
+  font-size: 30px;
+  color: DarkBlue;
+  text-align: center;
+}
+h4.author { /* Header 4 - and the author and data headers use this too  */
+    font-size: 20px;
+  text-align: center;
+}
+</style>
+
+
+# Preparations
+
+Load libraries, set the paths.
+The HMD corrected files were taken from **https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE103543**. The H3K4me3 file was taken from: **https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSM2773406**. 
+
+```{r setKnitrChunkDefaultOptions, include=FALSE}
+knitr::opts_chunk$set(
+  #echo = FALSE,
+  message = FALSE,
+  warning = FALSE,
+  cache = TRUE
+)
+```
+
+```{r loadLibraries, echo=FALSE, cache=FALSE}
+loadLibrary <- function(package) {
+  if (!require(basename(package), character.only = TRUE)) {
+    BiocManager::install(package, update = FALSE)
+  }
+  library(basename(package), character.only = TRUE)
+}
+
+packages <- c(
+  "GEOquery",
+  "rtracklayer",
+  "liftOver",
+  "biomaRt",
+  "ggplot2",
+  "data.table",
+  "Gviz",
+  "stringr",
+  "EnsDb.Hsapiens.v86",
+  "topGO",
+  "VennDiagram",
+  # "ggVennDiagram", # bug to install
+  "GO.db",
+  "ensembldb"
+)
+
+invisible(lapply(packages, loadLibrary))
+```
+
+```{r setEnvVariables}
+set.seed(22)
+edb <- EnsDb.Hsapiens.v86
+goterms <- Term(GOTERM)
+
+
+wdir <- getwd()
+peak_dir <- file.path(wdir, "peaks")
+wig_dir <- file.path(wdir, "bigWigs")
+objects <- file.path(wdir, "objects")
+figures <- file.path(wdir, "figures")
+source <- file.path(wdir, "source")
+
+dir.create(peak_dir)
+dir.create(wig_dir)
+dir.create(objects)
+
+# Default timeout (60) leads to the interruption of large bigwig files.
+# Depending on your connection speed, you may need higher values (untested).
+options(timeout=200)
+```
+
+```{r retrieveGEOAndEncodeFiles}
+path <- file.path(
+  peak_dir,
+  "GSE103543_AR16_H3K4me1-Corrected_High_Confidence_Peaks.bed.gz"
+)
+if (!file.exists(path)) {
+  getGEOSuppFiles(
+    "GSE103543",
+    baseDir = peak_dir,
+    makeDirectory = FALSE,
+    filter_regex = "H3K4me1-Corrected_High_Confidence_Peaks.bed"
+  )
+}
+getGEOSuppFiles(
+  "GSM2773406",
+  baseDir = peak_dir,
+  makeDirectory = FALSE,
+  filter_regex = "High_Confidence_Peaks.bed"
+)
+path <- file.path(
+  peak_dir,
+  "ENCFF516BJP_optimal_idr_thresholded_peaks_reps_1_and_2.bed.gz"
+)
+if (!file.exists(path)) {
+  download.file(
+    url = "https://www.encodeproject.org/files/ENCFF516BJP/@@download/ENCFF516BJP.bed.gz",
+    destfile = path
+  )
+}
+path <- file.path(
+  peak_dir,
+  "ENCFF100IJK_DHS_Stam_2018_rep1.bed.gz"
+)
+if (!file.exists(path)) {
+  download.file(
+    url = "https://www.encodeproject.org/files/ENCFF100IJK/@@download/ENCFF100IJK.bed.gz",
+    destfile = path
+  )
+}
+path <- file.path(
+  peak_dir,
+  "ENCFF339PKG_DHS_Stam_2018_rep2.bed.gz"
+)
+if (!file.exists(path)) {
+  download.file(
+    url = "https://www.encodeproject.org/files/ENCFF339PKG/@@download/ENCFF339PKG.bed.gz",
+    destfile = path
+  )
+}
+
+getGEOSuppFiles(
+  "GSM1480325",
+  baseDir = wig_dir,
+  makeDirectory = FALSE,
+  filter_regex = "bigWig"
+)
+
+path <- file.path(
+  wig_dir,
+  "GSM2773406_AR16-4_TF-PA5-40086_mQ20_L200_HMD.bigwig"
+)
+if (!file.exists(path)) {
+  getGEOSuppFiles(
+    "GSM2773406",
+    baseDir = wig_dir,
+    makeDirectory = FALSE,
+    filter_regex = "AR16-4_TF-PA5-40086_mQ20_L200_HMD.bigwig"
+  )
+}
+```
+
+# Gene annotation
+
+Throughout the methods, we consider one annotation of genes (*ensembl*).
+
+```{r defineGeneAnnotation,eval=TRUE}
+ensembl <- useEnsembl(
+  biomart = "genes",
+  dataset = "hsapiens_gene_ensembl",
+  version = 95
+)
+searchDatasets(mart = ensembl, pattern = "hsapiens_gene_ensembl")
+
+filt <- c(1:22, "X", "Y")
+
+loci <- getBM(
+  attributes = c(
+    "refseq_mrna",
+    "external_gene_name",
+    "chromosome_name",
+    "strand",
+    "transcription_start_site",
+    "transcript_start",
+    "transcript_end",
+    "start_position",
+    "end_position",
+    "gene_biotype"
+  ),
+  filters = c("chromosome_name"),
+  values = filt,
+  mart = ensembl
+)
+length(unique(loci$refseq_mrna))
+loci$STRAND <- rep("-", nrow(loci))
+loci$STRAND[loci$strand == 1] <- "+"
+loci$chr <- paste0("chr", loci$chromosome_name)
+
+table(loci$gene_biotype)
+all(loci$transcript_start < loci$transcript_end)
+```
+
+
+Now generate TSS and gene ranges. 
+
+
+```{r generateTSSAndGeneRanges}
+tss <- GRanges(
+  seqnames = Rle(loci$chr),
+  ranges = IRanges(as.numeric(loci$transcription_start_site) - 2000,
+    end = as.numeric(loci$transcription_start_site) + 2000
+  ),
+  strand = rep("*", nrow(loci))
+)
+
+genes <- GRanges(
+  seqnames = Rle(loci$chr),
+  ranges = IRanges(as.numeric(loci$start_position) - 2000,
+    end = as.numeric(loci$end_position) + 2000
+  ),
+  strand = rep("*", nrow(loci))
+)
+```
+
+
+# Analysis of enhancers 
+
+Note - all the files were mapped to the GRCh38 version of the human genome.
+We will consider only the High confidence peaks provided by the authors. Below we indicate which files were used in the analyses.
+
+```{r analyseEnhancers}
+readBed_filterChroms <- function(
+  filePath,
+  chroms = paste0("chr", c(1:22, "X", "Y")),
+  scoreCol = 4
+) {
+  x <- read.delim(
+    filePath,
+    as.is = T,
+    header = F
+  )
+  x <- x[x[, 1] %in% chroms, ]
+  return(
+    GRanges(
+      seqnames = Rle(x[, 1]),
+      ranges = IRanges(as.numeric(x[, 2]),
+        end = as.numeric(x[, 3]),
+        names = rownames(x)
+      ),
+      score = x[, scoreCol]
+    )
+  )
+}
+
+me1_peaks <- readBed_filterChroms(
+  file.path(
+    peak_dir,
+    "GSE103543_AR16_H3K4me1-Corrected_High_Confidence_Peaks.bed.gz"
+  )
+)
+
+me3_peaks <- readBed_filterChroms(
+  file.path(
+  peak_dir,
+  "GSM2773406_AR16-4_TF-PA5-40086_High_Confidence_Peaks.bed.gz"
+  )
+)
+
+pol <- readBed_filterChroms(
+  file.path(
+    peak_dir,
+    "ENCFF516BJP_optimal_idr_thresholded_peaks_reps_1_and_2.bed.gz"
+  )
+)
+```
+
+## Identification of enhancers
+
+We considered two most recent DHS experiments from John Stamatoyannopoulos lab and worked with DHS peaks that were detected in the two replicate experiments. 
+
+```{r defineDHS}
+dhs_rep1 <- readBed_filterChroms(
+  file.path(
+    peak_dir,
+    "ENCFF100IJK_DHS_Stam_2018_rep1.bed.gz"
+  )
+)
+seqlevelsStyle(dhs_rep1) <- "ncbi"
+
+
+dhs_rep2 <- readBed_filterChroms(
+  file.path(
+    peak_dir,
+    "ENCFF339PKG_DHS_Stam_2018_rep2.bed.gz"
+  )
+)
+seqlevelsStyle(dhs_rep2) <- "ncbi"
+
+dhs <- dhs_rep1[queryHits(findOverlaps(dhs_rep1, dhs_rep2))]
+dhs <- reduce(dhs)
+
+seqlevelsStyle(dhs) <- "ucsc"
+
+dhs
+```
+
+
+We have **54726** high confidence DHS sites in K562. 
+
+## Identification of **distal enhancers**
+
+
+We will consider only the DHS tht overlap H3K4me1 peaks.
+
+```{r identifyDHSH3K4me1Overlap}
+enhancers <- dhs[unique(queryHits(findOverlaps(dhs, me1_peaks)))]
+```
+
+
+We have **38588** putative enhancers. We will next identify **DHS that are distal with respect to the TSS** in the human genome. Note that we will **consider all the RNA species annotated so far, including lincRNAs and others**.
+
+
+```{r identifyEnhancers , warning=FALSE}
+enhancers <- enhancers[-unique(queryHits(findOverlaps(enhancers, tss)))]
+```
+
+
+Based on the TSS annotation, we identify **24649 DHS** that we will consider in the further steps of the analysis. We **next filter these instances for elements that do not intersect genes**.
+
+
+```{r identifyDistalEnhancers, warning=FALSE}
+distal_enhancers <- enhancers[-unique(queryHits(findOverlaps(enhancers, genes)))]
+```
+
+
+Now we have 9155 elements to consider. Export bed to execute the "lift-over" to *Hg19* using ucsc.
+
+```{r displayDistalEnhancers}
+distal_enhancers
+```
+
+```{r liftoverDistalEnhancersHg38toHg19}
+# Should work with all required conversions. Not tested for unrequired ones.
+loadChainFromUcsc <- function(conversion = "hg19ToHg38") {
+  chain_file <- paste0(
+    conversion,
+    ".over.chain"
+  )
+  if (!file.exists(chain_file)) {
+    origin_assembly <- sub(
+      "To.*$",
+      "",
+      conversion
+    )
+    chain_file_gz <- paste0(
+      chain_file,
+      ".gz"
+    )
+    download.file(
+      url = paste0(
+        "http://hgdownload.soe.ucsc.edu/goldenPath/",
+        origin_assembly,
+        "/liftOver/",
+        chain_file_gz
+      ),
+      destfile = chain_file_gz
+    )
+    gunzip(chain_file_gz)
+  }
+  chain <- import.chain(chain_file)
+}
+
+hg38ToHg19_chain <- loadChainFromUcsc(conversion = "hg38ToHg19")
+
+distal_enhancers_hg19 = unlist(
+  liftOver(
+    distal_enhancers,
+    chain = hg38ToHg19_chain
+  )
+)
+
+# Manual liftover should be obsolete now
+# export.bed(distal_enhancers, paste0(objects, "distal_enhancers_GRCh38.bed"))
+# distal_enhancers_hg19 <- readBed_filterChroms(paste0(objects, "distal_enhancers_GRCh37.bed"),
+#   chroms = paste0("chr", c(1:22, "X", "Y")), 5
+# )
+```
+
+
+### Active and not enhancers
+
+Identify enhancers with and without pol2 peaks.
+
+
+```{r identifyActiveInactiveDistalEnhancers}
+distal_enhancers_no_pol <- distal_enhancers[-unique(queryHits(findOverlaps(distal_enhancers, pol)))]
+distal_enhancers_with_pol <- distal_enhancers[unique(queryHits(findOverlaps(distal_enhancers, pol)))]
+
+save(
+  distal_enhancers_no_pol,
+  distal_enhancers_with_pol,
+  file = file.path(
+    objects,
+    "Enhancers_Pol2_stratification_GRCh38.RData"
+  )
+)
+```
+
+
+Statistics.
+
+
+```{r computeStatsForActiveInactiveDistalEnhancersPol2, fig.width=10, fig.height=10, out.width='50%', fig.align='center', dev.args=list(pointsize=24),fig.path=figures, dev=c('png', 'pdf')}
+statsP <- c(
+  length(unique(queryHits(findOverlaps(distal_enhancers_no_pol, me3_peaks)))),
+  length(unique(queryHits(findOverlaps(distal_enhancers_with_pol, me3_peaks))))
+)
+
+statsP
+
+statsP <- statsP / c(
+  length(distal_enhancers_no_pol),
+  length(distal_enhancers_with_pol)
+)
+statsP <- statsP * 100
+
+barplot(statsP,
+  col = c("red", "blue"),
+  names = c("Without", "With"),
+  ylim = c(0, 25),
+  ylab = "% of distal enhancers intersecting H3K4me3 peak",
+  xlab = "Pol2 peak"
+)
+```
+
+
+### Active and inactive enhancers - GRO-seq based classification
+
+Next, we score transcription at these distal DHS sites.
+
+
+```{r loadGROSeq, warning=FALSE}
+gro_min <- import.bw(
+  file.path(
+    wig_dir,
+    "GSM1480325_K562_GROseq_minus.bigWig"
+  )
+)
+gro_plus <- import.bw(
+  file.path(
+    wig_dir,
+    "GSM1480325_K562_GROseq_plus.bigWig"
+  )
+)
+
+gro <- c(gro_min, gro_plus)
+
+## Add the minus strand too
+gro$score <- as.numeric(abs(gro$score))
+```
+
+
+Now score for expression level at the distal enhancers.
+
+
+```{r distalEnhancersGROseqSignal, fig.width=15, fig.height=10, out.width='80%', fig.align='center', dev.args=list(pointsize=24),fig.path=figures, dev=c('png', 'pdf')}
+distal_enhancers_no_expression <- distal_enhancers_hg19[-unique(queryHits(findOverlaps(distal_enhancers_hg19, gro)))]
+
+
+gro_score_distal_enhancers <- as.data.frame(findOverlaps(distal_enhancers_hg19, gro))
+gro_score_distal_enhancers$gro <- score(gro)[gro_score_distal_enhancers[, 2]]
+gro_score_distal_enhancers <- gro_score_distal_enhancers[gro_score_distal_enhancers$gro > 0, ]
+
+gro_score_distal_enhancers <- split(gro_score_distal_enhancers[, 3], gro_score_distal_enhancers[, 1])
+
+distal_enhancers_hg19_transcription <- unlist(lapply(gro_score_distal_enhancers, function(x) {
+  sum(as.numeric(x), na.rm = TRUE)
+}))
+
+
+hist(log2(distal_enhancers_hg19_transcription),
+  n = 20,
+  main = "Enhancers with GRO-seq signal", col = "gray60",
+  xlab = expression("GRO-seq number of reads (log"[2] * ")")
+)
+abline(v = 2, col = "red", lwd = 2)
+
+
+distal_enhancers_low_expression <- distal_enhancers_hg19[as.numeric(names(distal_enhancers_hg19_transcription[distal_enhancers_hg19_transcription <= 2]))]
+
+distal_enhancers_high_expression <- distal_enhancers_hg19[as.numeric(names(distal_enhancers_hg19_transcription[distal_enhancers_hg19_transcription > 2]))]
+```
+
+
+Export the files and lift them over to GRCh38.
+
+
+```{r liftoverToGRCh38}
+# export.bed(
+#   distal_enhancers_no_expression,
+#   paste0(objects, "distal_enhancers_no_expression_GRCh37.bed")
+# )
+# export.bed(
+#   distal_enhancers_low_expression,
+#   paste0(objects, "distal_enhancers_low_expression_GRCh37.bed")
+# )
+# export.bed(
+#   distal_enhancers_high_expression,
+#   paste0(objects, "distal_enhancers_high_expression_GRCh37.bed")
+# )
+
+# readBed_filterChroms(paste0(objects, "distal_enhancers_GRCh37.bed"),
+#   chroms = paste0("chr", c(1:22, "X", "Y")), 5
+# )
+
+# distal_enhancers_no_expression_38 <- readBed_filterChroms(paste0(objects, "distal_enhancers_no_expression_GRCh38.bed"), chroms = paste0("chr", c(1:22, "X", "Y")), 5)
+# distal_enhancers_low_expression_38 <- readBed_filterChroms(paste0(objects, "distal_enhancers_low_expression_GRCh38.bed"), chroms = paste0("chr", c(1:22, "X", "Y")), 5)
+# distal_enhancers_high_expression_38 <- readBed_filterChroms(paste0(objects, "distal_enhancers_high_expression_GRCh38.bed"), chroms = paste0("chr", c(1:22, "X", "Y")), 5)
+
+
+hg19ToHg38_chain <- loadChainFromUcsc(conversion = "hg19ToHg38")
+
+distal_enhancers_no_expression_38 = unlist(
+  liftOver(
+    distal_enhancers_no_expression,
+    chain = hg19ToHg38_chain
+  )
+)
+distal_enhancers_low_expression_38 = unlist(
+  liftOver(
+    x = distal_enhancers_low_expression,
+    chain = hg19ToHg38_chain
+  )
+)
+distal_enhancers_high_expression_38 = unlist(
+  liftOver(
+    distal_enhancers_high_expression,
+    chain = hg19ToHg38_chain
+  )
+)
+
+save(
+  distal_enhancers_high_expression_38,
+  distal_enhancers_low_expression_38,
+  distal_enhancers_no_expression_38,
+  file = file.path(
+    objects,
+    "Enhancers_GRO_stratification_GRCh38.RData"
+  )
+)
+```
+
+
+### Enhancers overlap with H3K4me3
+
+How many of the distal DHS sites (stratified by expression measured by GRO-seq), overlap H3K4me3 peaks.
+
+
+```{r distalEnhancersOverlapWithH3K4me3, fig.width=10, fig.height=8, out.width='50%', fig.align='center', dev.args=list(pointsize=24),fig.path=figures, dev=c('png', 'pdf')}
+load(
+  file.path(
+    objects,
+    "Enhancers_GRO_stratification_GRCh38.RData"
+  )
+)
+stats <- c(
+  length(unique(queryHits(findOverlaps(distal_enhancers_no_expression_38, me3_peaks)))),
+  length(unique(queryHits(findOverlaps(distal_enhancers_low_expression_38, me3_peaks)))),
+  length(unique(queryHits(findOverlaps(distal_enhancers_high_expression_38, me3_peaks))))
+)
+
+stats
+
+stats <- stats / c(
+  length(distal_enhancers_no_expression_38),
+  length(distal_enhancers_low_expression_38),
+  length(distal_enhancers_high_expression_38)
+)
+stats <- stats * 100
+
+barplot(stats,
+  col = c("red", "blue", "blue4"),
+  names = c("No", "Low", "High"), ylim = c(0, 20),
+  ylab = "% of distal enhancers intersecting H3K4me3 peak",
+  xlab = "GRO-seq expression level"
+)
+```
+
+
+### Visualisation 
+
+Let's display some examples in the browser. We choose the most specific antibody (H3K4me3-3), the high confidence H3K4me3 peaks and the annotation of distal enhancers.
+
+
+```{r vis, cache.lazy = FALSE}
+me3_track_HMD <- import(
+  file.path(
+    wig_dir,
+    "GSM2773406_AR16-4_TF-PA5-40086_mQ20_L200_HMD.bigwig"
+  )
+)
+seqlevelsStyle(me3_track_HMD) <- "ncbi"
+```
+
+
+Plot examples.
+
+The GATA1 locus.
+
+
+```{r plotGATA1, fig.width=12, fig.height=10, out.width='50%', fig.align='center', dev.args=list(pointsize=30),fig.path=figures, dev=c('png', 'pdf'), warning=FALSE}
+options(ucscChromosomeNames = FALSE)
+st <- 48775000 + 7000
+en <- 48787500
+thechr <- "X"
+
+bedgraph_dt_one_chr1 <- me3_track_HMD[which(seqnames(me3_track_HMD) == thechr)]
+me3_peaks_ncbi <- me3_peaks
+seqlevelsStyle(me3_peaks_ncbi) <- "ncbi"
+
+distal_enhancers_ncbi <- distal_enhancers
+seqlevelsStyle(distal_enhancers_ncbi) <- "ncbi"
+
+biomTrack <- BiomartGeneRegionTrack(
+  genome = "hg38",
+  biomart = ensembl,
+  chromosome = thechr,
+  start = st,
+  end = en,
+  name = "ENSEMBL",
+  background.panel = "#FFFFFF",
+  background.title = "#FFFFFF",
+  col.axis = "black",
+  col.title = "black",
+  col = 1,
+  fill = "gray70",
+  ontfamily = "Arial",
+  showID = FALSE,
+  geneSymbol = TRUE
+)
+
+
+## ChIPseq
+dtrac1 <- DataTrack(
+  range = bedgraph_dt_one_chr1,
+  type = "h",
+  genome = "hg38",
+  name = "H3K4me3 HMD (40086)",
+  background.panel = "#FFFFFF",
+  background.title = "#FFFFFF",
+  col.axis = "black",
+  col.title = "black",
+  col = 1,
+  fill = 1,
+  fontfamily = "Arial"
+)
+
+## peaks
+thisReg_me3_peaks1 <- AnnotationTrack(
+  me3_peaks_ncbi,
+  genome = "hg38",
+  name = "H3K4me3",
+  chromosome = thechr,
+  shape = "box",
+  fill = "blue",
+  size = 1.5,
+  background.panel = "#FFFFFF",
+  background.title = "#FFFFFF",
+  col.axis = "black",
+  col.title = "black",
+  col = 1,
+  fontfamily = "Arial"
+)
+
+thisReg_enhancers <- AnnotationTrack(distal_enhancers_ncbi,
+  genome = "hg38",
+  name = "Distal Enhancers",
+  chromosome = thechr,
+  shape = "box",
+  fill = "red",
+  size = 1.5,
+  background.panel = "#FFFFFF",
+  background.title = "#FFFFFF",
+  col.axis = "black",
+  col.title = "black",
+  col = 1,
+  fontfamily = "Arial"
+)
+
+
+# itrack = IdeogramTrack(genome = "hg38", chromosome = thechr)
+gtrack <- GenomeAxisTrack()
+
+
+plotTracks(list(
+  dtrac1,
+  thisReg_me3_peaks1,
+  thisReg_enhancers,
+  biomTrack
+),
+chromosome = thechr,
+from = st, to = en
+)
+```
+
+The profiles along with annotations at the PRKAR2B locus.
+
+```{r plotPRKAR2B, fig.width=12, fig.height=10, out.width='50%', fig.align='center', dev.args=list(pointsize=30),fig.path=figures, dev=c('png', 'pdf'), warning=FALSE}
+thechr <- 7
+st <- 106960000 + 35000
+en <- 107060000
+bedgraph_dt_one_chr1 <- me3_track_HMD[which(seqnames(me3_track_HMD) == thechr)]
+me3_peaks_ncbi <- me3_peaks
+seqlevelsStyle(me3_peaks_ncbi) <- "ncbi"
+
+distal_enhancers_ncbi <- distal_enhancers
+seqlevelsStyle(distal_enhancers_ncbi) <- "ncbi"
+
+biomTrack <- BiomartGeneRegionTrack(
+  genome = "hg38",
+  biomart = ensembl,
+  chromosome = thechr,
+  start = st,
+  end = en,
+  name = "ENSEMBL",
+  background.panel = "#FFFFFF",
+  background.title = "#FFFFFF",
+  col.axis = "black",
+  col.title = "black",
+  col = 1,
+  fill = "gray70",
+  ontfamily = "Arial",
+  showID = FALSE,
+  geneSymbol = TRUE
+)
+
+
+## ChIPseq
+dtrac1 <- DataTrack(
+  range = bedgraph_dt_one_chr1,
+  type = "h",
+  genome = "hg38",
+  name = "H3K4me3 HMD (40086)",
+  background.panel = "#FFFFFF",
+  background.title = "#FFFFFF",
+  col.axis = "black",
+  col.title = "black",
+  col = 1,
+  fill = 1,
+  fontfamily = "Arial"
+)
+
+## peaks
+thisReg_me3_peaks1 <- AnnotationTrack(
+  me3_peaks_ncbi,
+  genome = "hg38",
+  name = "H3K4me3",
+  chromosome = thechr,
+  shape = "box",
+  fill = "blue",
+  size = 1.5,
+  background.panel = "#FFFFFF",
+  background.title = "#FFFFFF",
+  col.axis = "black",
+  col.title = "black",
+  col = 1,
+  fontfamily = "Arial"
+)
+
+
+thisReg_enhancers <- AnnotationTrack(
+  distal_enhancers_ncbi,
+  genome = "hg38",
+  name = "Distal Enhancers",
+  chromosome = thechr,
+  shape = "box",
+  fill = "red",
+  size = 1.5,
+  background.panel = "#FFFFFF",
+  background.title = "#FFFFFF",
+  col.axis = "black",
+  col.title = "black",
+  col = 1,
+  fontfamily = "Arial"
+)
+
+
+# itrack = IdeogramTrack(genome = "hg38", chromosome = thechr)
+gtrack <- GenomeAxisTrack()
+
+
+plotTracks(list(
+  dtrac1,
+  thisReg_me3_peaks1,
+  thisReg_enhancers,
+  biomTrack
+),
+chromosome = thechr,
+from = st, to = en
+)
+```
+
+
+## H3K4me3 score at enhancers
+
+
+Here, we will compute the H3K4me3 score from the bigWig file directly.
+
+
+```{r defineComputeH3K4me3Score}
+computeH3K4me3Score <- function(bw_file, peak_file) {
+
+  ## bw_file=me3_track; peak_file=distal_enhancers
+  overlaps <- findOverlaps(
+    bw_file,
+    peak_file
+  )
+  scores <- elementMetadata(bw_file[queryHits(overlaps)])[, 1]
+  stopifnot(length(scores) == length(overlaps))
+  os <- unlist(lapply(split(scores, subjectHits(overlaps)), function(x) {
+    sum(x, na.rm = TRUE)
+  }))
+  res <- data.frame(
+    peak_number = as.numeric(names(os)),
+    peak_score = os,
+    stringsAsFactors = FALSE
+  )
+  return(res)
+}
+```
+
+
+Now integrate the H3K4me3 signal at all the defined enhancer classes. We will consider the HMD file for the best antibody
+
+
+```{r, H3K4me3_HMD_CI_scores, cache.lazy=FALSE}
+seqlevelsStyle(me3_track_HMD) <- "ucsc"
+distal_enhancers_no_pol_me3_score <- computeH3K4me3Score(
+  me3_track_HMD,
+  distal_enhancers_no_pol
+)
+
+distal_enhancers_wi_pol_me3_score <- computeH3K4me3Score(
+  me3_track_HMD,
+  distal_enhancers_with_pol
+)
+
+distal_enhancers_no_exp_me3_score <- computeH3K4me3Score(
+  me3_track_HMD,
+  distal_enhancers_no_expression_38
+)
+
+distal_enhancers_lo_exp_me3_score <- computeH3K4me3Score(
+  me3_track_HMD,
+  distal_enhancers_low_expression_38
+)
+
+distal_enhancers_hi_exp_me3_score <- computeH3K4me3Score(
+  me3_track_HMD,
+  distal_enhancers_high_expression_38
+)
+
+save(
+  distal_enhancers_no_pol_me3_score,
+  distal_enhancers_wi_pol_me3_score,
+  distal_enhancers_no_exp_me3_score,
+  distal_enhancers_lo_exp_me3_score,
+  distal_enhancers_hi_exp_me3_score,
+  file = file.path(
+    objects,
+    "distal_enhancers_H3K4me3_scores_HMD.RData"
+  )
+)
+```
+
+Display the box-plots.
+
+```{r pol2_GRO-seq_distal_enhancer_H3K4me_score3, fig.width=12, fig.height=9, out.width='50%', fig.align='center', dev.args=list(pointsize=24),fig.path=figures, dev=c('png', 'pdf')}
+load(
+  file.path(
+    objects,
+    "distal_enhancers_H3K4me3_scores_HMD.RData"
+  )
+)
+
+par(
+  mfrow = c(1, 2),
+  mar = c(8, 5, 3, 1),
+  bty = "n",
+  lwd = 2
+)
+boxplot(
+  log2(1 + distal_enhancers_no_pol_me3_score[, 2]),
+  log2(1 + distal_enhancers_wi_pol_me3_score[, 2]),
+  outline = F,
+  names = c("Absent", "Present"),
+  col = c("red3", "blue3"),
+  xlab = "Pol2",
+  main = "HMD file for Thermo",
+  ylab = expression("H3K4me3 (integrated signal (log"[2] * "))"),
+  las = 2
+)
+boxplot(
+  log2(1 + distal_enhancers_no_exp_me3_score[, 2]),
+  log2(1 + distal_enhancers_lo_exp_me3_score[, 2]),
+  log2(1 + distal_enhancers_hi_exp_me3_score[, 2]),
+  outline = F,
+  names = c("No", "Low", "High"),
+  col = c("red3", "blue3", "green3"),
+  xlab = "GRO-seq expression class",
+  main = "HMD file for Thermo",
+  ylab = expression("H3K4me3 (signal (log"[2] * "))"),
+  las = 2
+)
+
+t.test(
+  log2(1 + distal_enhancers_no_pol_me3_score[, 2]),
+  log2(1 + distal_enhancers_wi_pol_me3_score[, 2])
+)
+
+t.test(
+  log2(1 + distal_enhancers_no_exp_me3_score[, 2]),
+  log2(1 + distal_enhancers_lo_exp_me3_score[, 2])
+)
+
+t.test(
+  log2(1 + distal_enhancers_lo_exp_me3_score[, 2]),
+  log2(1 + distal_enhancers_hi_exp_me3_score[, 2])
+)
+```
+
+
+Enhancers that overlap pol2 are more likely to overlap H3K4me3
+
+```{r}
+length(unique(queryHits(findOverlaps(distal_enhancers_no_pol, me3_peaks))))
+length(distal_enhancers_no_pol) - length(unique(queryHits(findOverlaps(distal_enhancers_no_pol, me3_peaks))))
+length(unique(queryHits(findOverlaps(distal_enhancers_with_pol, me3_peaks))))
+length(distal_enhancers_with_pol) - length(unique(queryHits(findOverlaps(distal_enhancers_with_pol, me3_peaks))))
+
+fisher.test(matrix(
+  c(
+    length(unique(queryHits(findOverlaps(distal_enhancers_no_pol, me3_peaks)))),
+    length(distal_enhancers_no_pol) - length(unique(queryHits(findOverlaps(distal_enhancers_no_pol, me3_peaks)))),
+    length(unique(queryHits(findOverlaps(distal_enhancers_with_pol, me3_peaks)))),
+    length(distal_enhancers_with_pol) - length(unique(queryHits(findOverlaps(distal_enhancers_with_pol, me3_peaks))))
+  ),
+  2, 2
+))
+
+length(unique(queryHits(findOverlaps(distal_enhancers_no_pol, me3_peaks)))) / length(distal_enhancers_no_pol)
+
+length(unique(queryHits(findOverlaps(distal_enhancers_with_pol, me3_peaks)))) / length(distal_enhancers_with_pol)
+
+## expressed
+eRNA_enhancers <- c(distal_enhancers_low_expression_38, distal_enhancers_high_expression_38)
+
+length(unique(queryHits(findOverlaps(distal_enhancers_no_expression_38, me3_peaks)))) / length(distal_enhancers_no_expression_38)
+
+length(unique(queryHits(findOverlaps(eRNA_enhancers, me3_peaks)))) / length(eRNA_enhancers)
+
+
+fisher.test(matrix(
+  c(
+    length(unique(queryHits(findOverlaps(distal_enhancers_no_expression_38, me3_peaks)))),
+    length(distal_enhancers_no_expression_38) - length(unique(queryHits(findOverlaps(distal_enhancers_no_expression_38, me3_peaks)))),
+    length(unique(queryHits(findOverlaps(eRNA_enhancers, me3_peaks)))),
+    length(eRNA_enhancers) - length(unique(queryHits(findOverlaps(eRNA_enhancers, me3_peaks))))
+  ),
+  2, 2
+))
+```
+
+
+## TBP and pol2-Ser5P
+
+
+```{r}
+tbp_path <- file.path(
+  peak_dir,
+  "ENCFF609UTS.bed.gz"
+)
+if (!file.exists(tbp_path)){
+  download.file(
+    url = "https://www.encodeproject.org/files/ENCFF609UTS/@@download/ENCFF609UTS.bed.gz",
+    destfile = file.path(
+      peak_dir,
+      "ENCFF609UTS.bed.gz"
+    )
+  )
+}
+
+tbp <- readBed_filterChroms(
+  tbp_path,
+  chroms = paste0("chr", c(1:22, "X", "Y")),
+  4
+)
+
+pol2ser5_rep1_path <- file.path(
+  peak_dir,
+  "GSM3536522_K562_PolSer5P_Rep1.bed.gz"
+)
+pol2ser5_rep2_path <- file.path(
+  peak_dir,
+  "GSM3536522_K562_PolSer5P_Rep2.bed.gz"
+)
+
+if (
+  !file.exists(pol2ser5_rep1_path) |
+  !file.exists(pol2ser5_rep2_path)
+) {
+  getGEOSuppFiles(
+    "GSM3536522",
+    baseDir = peak_dir,
+    makeDirectory = FALSE,
+    filter_regex = "bed"
+  )
+}
+
+pol2ser5_rep1 <- readBed_filterChroms(
+  pol2ser5_rep1_path,
+  chroms = paste0("chr", c(1:22, "X", "Y")),
+  3
+)
+
+pol2ser5_rep2 <- readBed_filterChroms(
+  pol2ser5_rep2_path,
+  chroms = paste0("chr", c(1:22, "X", "Y")),
+  3
+)
+
+# pool the replicates
+pol2ser5 <- c(pol2ser5_rep1, pol2ser5_rep2)
+```
+
+And assess the overlap between pol2 phosphorylated on Ser5 and with TBP.
+
+
+```{r, warning=FALSE, Distal_enhancers_pol2Ser5_tbp, fig.width=10, fig.height=10, out.width='50%', fig.align='center', dev.args=list(pointsize=24),base.dir=figures, dev=c('png', 'pdf')}
+
+distal_enhancers_hg19$pol2ser5 <- countOverlaps(
+  distal_enhancers_hg19,
+  pol2ser5
+)
+
+hist(log2(distal_enhancers_hg19$pol2ser5),
+  n = 35, main = "Pol2-Ser5 score at distal DHS",
+  col = "wheat4",
+  xlab = expression("CUT&RUN (log2)")
+)
+abline(v = 4, col = "red4", lwd = 3)
+
+# export.bed(
+#   distal_enhancers_hg19[which(distal_enhancers_hg19$pol2ser5 < 4)],
+#   con = file.path(
+#     peak_dir,
+#     "distal_enhancers_hg19_withoutPol2Ser5.bed"
+#   )
+# )
+
+# export.bed(
+#   distal_enhancers_hg19[which(distal_enhancers_hg19$pol2ser5 >= 4)],
+#   con = file.path(
+#     peak_dir,
+#     "distal_enhancers_hg19_withPol2Ser5.bed"
+#   )
+# )
+
+
+# # ---------------------------------
+
+# distal_enhancers_GRCh38_pol2Ser5 <- readBed_filterChroms(
+#   file.path(
+#     peak_dir,
+#     "distal_enhancers_GRCh38_withPol2Ser5.bed"
+#   ),
+#   chroms = paste0("chr", c(1:22, "X", "Y")),
+#   3
+# )
+
+# distal_enhancers_GRCh38_wo_pol2Ser5 <- readBed_filterChroms(
+#   file.path(
+#     peak_dir,
+#     "distal_enhancers_GRCh38_withoutPol2Ser5.bed"
+#   ),
+#   chroms = paste0("chr", c(1:22, "X", "Y")),
+#   3
+# )
+
+distal_enhancers_hg19_withoutPol2Ser5 <- distal_enhancers_hg19[which(distal_enhancers_hg19$pol2ser5 < 4)]
+
+distal_enhancers_hg19_withPol2Ser5 <- distal_enhancers_hg19[which(distal_enhancers_hg19$pol2ser5 >= 4)]
+
+distal_enhancers_GRCh38_pol2Ser5 <- unlist(
+  liftOver(
+    x = distal_enhancers_hg19_withPol2Ser5,
+    chain = hg19ToHg38_chain
+  )
+)
+
+distal_enhancers_GRCh38_wo_pol2Ser5 <- unlist(
+  liftOver(
+    x = distal_enhancers_hg19_withoutPol2Ser5,
+    chain = hg19ToHg38_chain
+  )
+)
+
+## define the classes of enhancers
+distal_enhancers_GRCh38_wo_pol2Ser5_noTBP <- distal_enhancers_GRCh38_wo_pol2Ser5[-unique(queryHits(findOverlaps(distal_enhancers_GRCh38_wo_pol2Ser5, tbp)))]
+
+distal_enhancers_GRCh38_wo_pol2Ser5_withTBP <- distal_enhancers_GRCh38_wo_pol2Ser5[unique(queryHits(findOverlaps(distal_enhancers_GRCh38_wo_pol2Ser5, tbp)))]
+
+distal_enhancers_GRCh38_pol2Ser5_no_tbp <- distal_enhancers_GRCh38_pol2Ser5[-queryHits(findOverlaps(distal_enhancers_GRCh38_pol2Ser5, tbp))]
+
+distal_enhancers_GRCh38_pol2Ser5_tbp <- distal_enhancers_GRCh38_pol2Ser5[queryHits(findOverlaps(distal_enhancers_GRCh38_pol2Ser5, tbp))]
+
+
+
+statsP2 <- c(
+  length(unique(queryHits(findOverlaps(distal_enhancers_GRCh38_wo_pol2Ser5_noTBP, me3_peaks)))),
+  length(unique(queryHits(findOverlaps(distal_enhancers_GRCh38_pol2Ser5_no_tbp, me3_peaks)))),
+  length(unique(queryHits(findOverlaps(distal_enhancers_GRCh38_wo_pol2Ser5_withTBP, me3_peaks)))),
+  length(unique(queryHits(findOverlaps(distal_enhancers_GRCh38_pol2Ser5_tbp, me3_peaks))))
+)
+
+statsP2
+
+statsP2 <- statsP2 / c(
+  length(distal_enhancers_GRCh38_wo_pol2Ser5_noTBP),
+  length(distal_enhancers_GRCh38_pol2Ser5_no_tbp),
+  length(distal_enhancers_GRCh38_wo_pol2Ser5_withTBP),
+  length(distal_enhancers_GRCh38_pol2Ser5_tbp)
+)
+statsP2 <- statsP2 * 100
+
+barplot(statsP2,
+  col = c("wheat1", "red3", "orange3", "gray60", "blue"),
+  names = c("Ser5P-TBP-", "Ser5P+TBP-", "Ser5P-TBP+", "Ser5+TBP+"),
+  ylim = c(0, 40),
+  ylab = "% of distal enhancers intersecting H3K4me3 peak",
+  main = "Signature of the DHS", las = 2
+)
+
+save(
+  distal_enhancers_GRCh38_wo_pol2Ser5_noTBP,
+  distal_enhancers_GRCh38_wo_pol2Ser5_withTBP,
+  distal_enhancers_GRCh38_pol2Ser5_no_tbp,
+  distal_enhancers_GRCh38_pol2Ser5_tbp,
+  file = paste0(objects, "Ser5_TBP_distal_enhancers_simplified.RData")
+)
+```
+
+
+Level of H3K4me3 at enhancers stratified based on Pol2-Ser5 phosphorylation and TBP binding.
+
+```{r}
+
+distal_enhancers_GRCh38_wo_pol2Ser5_noTBP_me3_score <-
+  computeH3K4me3Score(
+    me3_track_HMD,
+    distal_enhancers_GRCh38_wo_pol2Ser5_noTBP
+  )
+
+distal_enhancers_GRCh38_wo_pol2Ser5_withTBP_me3_score <-
+  computeH3K4me3Score(
+    me3_track_HMD,
+    distal_enhancers_GRCh38_wo_pol2Ser5_withTBP
+  )
+
+distal_enhancers_GRCh38_pol2Ser5_no_tbp_me3_score <-
+  computeH3K4me3Score(
+    me3_track_HMD,
+    distal_enhancers_GRCh38_pol2Ser5_no_tbp
+  )
+
+distal_enhancers_GRCh38_pol2Ser5_tbp_me3_score <-
+  computeH3K4me3Score(
+    me3_track_HMD,
+    distal_enhancers_GRCh38_pol2Ser5_tbp
+  )
+
+
+save(
+  distal_enhancers_GRCh38_wo_pol2Ser5_noTBP_me3_score,
+  distal_enhancers_GRCh38_wo_pol2Ser5_withTBP_me3_score,
+  distal_enhancers_GRCh38_pol2Ser5_no_tbp_me3_score,
+  distal_enhancers_GRCh38_pol2Ser5_tbp_me3_score,
+  file = file.path(
+    objects,
+    "H3K4me3_HMD_scores_pol2ser5_tbp_FINAL.RData"
+  )
+)
+```
+
+Display H3K4me3 level at enhancers stratified by the presence of TBP and Pol2-Ser5P.
+
+
+```{r, H3K4me3_score_enahncers_TBP_Pol2_ser5P, fig.width=9, fig.height=9, out.width='50%', fig.align='center', dev.args=list(pointsize=24),base.dir=figures, dev=c('png', 'pdf')}
+load(file.path(objects, "H3K4me3_HMD_scores_pol2ser5_tbp_FINAL.RData"))
+par(
+  mfrow = c(1, 1),
+  mar = c(8, 5, 3, 1),
+  bty = "n",
+  lwd = 2
+)
+boxplot(
+  log2(0.1 + distal_enhancers_GRCh38_wo_pol2Ser5_noTBP_me3_score[, 2]),
+  log2(0.1 + distal_enhancers_GRCh38_pol2Ser5_no_tbp_me3_score[, 2]),
+  log2(0.1 + distal_enhancers_GRCh38_wo_pol2Ser5_withTBP_me3_score[, 2]),
+  log2(0.1 + distal_enhancers_GRCh38_pol2Ser5_tbp_me3_score[, 2]),
+  outline = F,
+  col = c("wheat3", "red3", "orange3", "gray60"),
+  names = c("Ser5P-TBP-", "Ser5P+TBP-", "Ser5P-TBP+", "Ser5+TBP+"),
+  xlab = "",
+  main = "",
+  ylim = c(0, 12),
+  ylab = expression("H3K4me3 (integrated signal (log"[2] * "))"),
+  las = 2
+)
+
+t.test(
+  log2(0.1 + distal_enhancers_GRCh38_wo_pol2Ser5_noTBP_me3_score[, 2]),
+  log2(0.1 + distal_enhancers_GRCh38_pol2Ser5_no_tbp_me3_score[, 2])
+)
+
+t.test(
+  log2(0.1 + distal_enhancers_GRCh38_pol2Ser5_no_tbp_me3_score[, 2]),
+  log2(0.1 + distal_enhancers_GRCh38_wo_pol2Ser5_withTBP_me3_score[, 2])
+)
+
+
+t.test(
+  log2(0.1 + distal_enhancers_GRCh38_wo_pol2Ser5_withTBP_me3_score[, 2]),
+  log2(0.1 + distal_enhancers_GRCh38_pol2Ser5_tbp_me3_score[, 2])
+)
+
+t.test(
+  log2(0.1 + distal_enhancers_GRCh38_wo_pol2Ser5_noTBP_me3_score[, 2]),
+  log2(0.1 + distal_enhancers_GRCh38_pol2Ser5_tbp_me3_score[, 2])
+)
+```
+
+
+# GRO-cap based classification
+
+Analysis of the GRO-cap data. This is Hg19.
+
+```{r loadGROcap}
+gro_min_path <- file.path(
+  wig_dir,
+  "GSM1480321_K562_GROcap_wTAP_plus.bigWig"
+)
+
+gro_plus_path <- file.path(
+  wig_dir,
+  "GSM1480321_K562_GROcap_wTAP_minus.bigWig"
+)
+
+if (
+  !file.exists(gro_min_path) |
+  !file.exists(gro_plus_path)
+) {
+  getGEOSuppFiles(
+    "GSM1480321",
+    baseDir = wig_dir,
+    makeDirectory = FALSE,
+    filter_regex = ".bigWig"
+  )
+}
+
+gro_min <- import.bw(gro_min_path)
+gro_plus <- import.bw(gro_plus_path)
+
+gro <- c(gro_min, gro_plus)
+```
+
+Now score for expression level at the distal enhancers
+
+
+```{r distalEnhancersGROCAPSignal, fig.width=15, fig.height=10, out.width='80%', fig.align='center', dev.args=list(pointsize=24),base.dir=figures, dev=c('png', 'pdf')}
+
+## enhancers that do not overlap GRO-cap reads
+distal_enhancers_no_expression <- distal_enhancers_hg19[-unique(queryHits(findOverlaps(distal_enhancers_hg19, gro)))]
+
+
+gro_score_distal_enhancers <- as.data.frame(findOverlaps(distal_enhancers_hg19, gro))
+gro_score_distal_enhancers$gro <- score(gro)[gro_score_distal_enhancers[, 2]]
+gro_score_distal_enhancers <- gro_score_distal_enhancers[gro_score_distal_enhancers$gro > 0, ]
+
+gro_score_distal_enhancers <- split(gro_score_distal_enhancers[, 3], gro_score_distal_enhancers[, 1])
+
+distal_enhancers_hg19_transcription <- unlist(lapply(gro_score_distal_enhancers, sum))
+
+
+hist(
+  log2(distal_enhancers_hg19_transcription),
+  n = 50,
+  main = "Enhancers with GRO-cap signal", col = "gray60",
+  xlab = expression("GRO-cap number of reads (log"[2] * ")")
+)
+abline(v = log2(5), col = "red", lwd = 2)
+
+## enhancers with low transcription
+distal_enhancers_low_expression <- distal_enhancers_hg19[as.numeric(names(distal_enhancers_hg19_transcription[distal_enhancers_hg19_transcription <= 5]))]
+## enhancers with high transcription
+distal_enhancers_high_expression <- distal_enhancers_hg19[as.numeric(names(distal_enhancers_hg19_transcription[distal_enhancers_hg19_transcription > 5]))]
+```
+
+
+Export the files and lift them over to GRCh38.
+
+
+```{r liftoverToGRCh38GROcap}
+# export.bed(
+#   distal_enhancers_no_expression,
+#   file.path(
+#     peak_dir,
+#     "distal_enhancers_no_expression_GRO-cap_GRCh37_TAP_FINAL.bed"
+#   )
+# )
+# export.bed(
+#   distal_enhancers_low_expression,
+#   file.path(
+#     peak_dir,
+#     "distal_enhancers_low_expression_GRO-cap_GRCh37_TAP_FINAL.bed"
+#   )
+# )
+# export.bed(
+#   distal_enhancers_high_expression,
+#   file.path(
+#     peak_dir,
+#     "distal_enhancers_high_expression_GRO-cap_GRCh37_TAP_FINAL.bed"
+#   )
+# )
+
+# ##################################################################
+
+# distal_enhancers_no_expression_38 <- readBed_filterChroms(
+#   file.path(
+#     peak_dir,
+#     "distal_enhancers_no_expression_GRO-cap_GRCh38_TAP_FINAL.bed"
+#   ),
+#   chroms = paste0("chr", c(1:22, "X", "Y")),
+#   3
+# )
+
+# distal_enhancers_low_expression_38 <- readBed_filterChroms(
+#   file.path(
+#     peak_dir,
+#     "distal_enhancers_low_expression_GRO-cap_GRCh38_TAP_FINAL.bed"
+#   ),
+#   chroms = paste0("chr", c(1:22, "X", "Y")),
+#   3
+# )
+
+# distal_enhancers_high_expression_38 <- readBed_filterChroms(
+#   file.path(
+#     peak_dir,
+#     "distal_enhancers_high_expression_GRO-cap_GRCh38_TAP_FINAL.bed"
+#   ),
+#   chroms = paste0("chr", c(1:22, "X", "Y")),
+#   3
+# )
+
+distal_enhancers_no_expression_38 <- unlist(
+  liftOver(
+    x = distal_enhancers_no_expression,
+    chain = hg19ToHg38_chain
+  )
+)
+
+distal_enhancers_low_expression_38 <- unlist(
+  liftOver(
+    x = distal_enhancers_low_expression,
+    chain = hg19ToHg38_chain
+  )
+)
+
+distal_enhancers_high_expression_38 <- unlist(
+  liftOver(
+    x = distal_enhancers_high_expression,
+    chain = hg19ToHg38_chain
+  )
+)
+
+save(
+  distal_enhancers_high_expression_38,
+  distal_enhancers_low_expression_38,
+  distal_enhancers_no_expression_38,
+  file = file.path(
+    objects,
+    "Enhancers_GRO_stratification_GRO-cap_GRCh38_TAP.RData"
+  )
+)
+```
+
+How many of the distal DHS sites (stratified by expression measured by GRO-cap), overlap H3K4me3 peaks.
+
+
+```{r, warning=FALSE, distal_enhancers_overlap_with_H3K4_GRO_CAP, fig.width=10, fig.height=8, out.width='50%', fig.align='center', dev.args=list(pointsize=24),base.dir=figures, dev=c('png', 'pdf')}
+stats <- c(
+  length(unique(queryHits(findOverlaps(distal_enhancers_no_expression_38, me3_peaks)))),
+  length(unique(queryHits(findOverlaps(distal_enhancers_low_expression_38, me3_peaks)))),
+  length(unique(queryHits(findOverlaps(distal_enhancers_high_expression_38, me3_peaks))))
+)
+
+stats
+
+stats <- stats / c(
+  length(distal_enhancers_no_expression_38),
+  length(distal_enhancers_low_expression_38),
+  length(distal_enhancers_high_expression_38)
+)
+stats <- stats * 100
+
+barplot(
+  stats,
+  col = c("red", "blue", "blue4"),
+  names = c("No", "Low", "High"),
+  ylim = c(0, 20),
+  ylab = "% of distal enhancers intersecting H3K4me3 peak",
+  xlab = "GRO-cap expression level"
+)
+```
+
+
+
+```{r H3K4me3_HMD_CI_scores_CAP, cache.lazy=FALSE}
+distal_enhancers_no_exp_HMD_me3_score <- computeH3K4me3Score(
+  me3_track_HMD,
+  distal_enhancers_no_expression_38
+)
+
+distal_enhancers_lo_exp_HMD_me3_score <- computeH3K4me3Score(
+  me3_track_HMD,
+  distal_enhancers_low_expression_38
+)
+
+distal_enhancers_hi_exp_HMD_me3_score <- computeH3K4me3Score(
+  me3_track_HMD,
+  distal_enhancers_high_expression_38
+)
+
+save(
+  distal_enhancers_no_exp_HMD_me3_score,
+  distal_enhancers_lo_exp_HMD_me3_score,
+  distal_enhancers_hi_exp_HMD_me3_score,
+  file = file.path(
+    objects,
+    "distal_enhancers_H3K4me3_scores_HMD_GRO-Cap.RData"
+  )
+)
+
+boxplot(
+  log2(0.1 + distal_enhancers_no_exp_HMD_me3_score[, 2]),
+  log2(0.1 + distal_enhancers_lo_exp_HMD_me3_score[, 2]),
+  log2(0.1 + distal_enhancers_hi_exp_HMD_me3_score[, 2]),
+  outline = FALSE,
+  names = c("No", "Low", "High"),
+  col = c("red3", "blue3", "green3"),
+  main = "GRO-cap (with TAP)",
+  ylim = c(0, 12),
+  ylab = expression("H3K4me3 (integrated signal (log"[2] * "))"),
+  las = 2
+)
+```
+
+
+
+# Clustering of H3K4me2 signal around the TSS
+
+
+We will consider the list of RefSeq genes imported above. We will focus on RefSeq identifiers and find promoter regions of genes (-2 to +8 kb). 
+
+Define set of promoters to work with. Genes might have several RefSeq mRNA IDs, thus to decide which one to take, we will filter loci on the basis of gene symbol (like in our previous paper Pekowska *et al.*, *Genome Research* 2010). If there are several clustered TSS (within 200bp window), we will consider the one located at the shortest distance from the TTS. We keep only transcripts longer than 8kb.
+
+The paper by Shah et al., was published in 2018, back when we first submitted our letter to the editor we used GRCh38.p12 version of the human genome assembly.
+
+Find promoters that overlap only one gene. We identify promoters that do not overlap other genes and generate *GRanges* object with regions spanning -2 to +8 kb around the TSS. 
+
+
+```{r}
+genes <- GRanges(
+  seqnames = Rle(as.character(loci$chr)),
+  ranges = IRanges(as.numeric(loci$start_position),
+    end = as.numeric(loci$end_position),
+    names = seq(1, nrow(loci))
+  ),
+  strand = Rle(rep("*", nrow(loci)))
+)
+genes$gene <- loci$refseq_mrna
+genes$gene_name <- loci$external_gene_name
+genes$TSS <- loci$transcription_start_site
+genes$biotype <- loci$gene_biotype
+genes$STRAND <- loci$STRAND
+
+
+G_list <- loci
+G_list <- G_list[G_list$gene_biotype == "protein_coding", ]
+G_list <- G_list[G_list$refseq_mrna != "", ]
+G_list$RefSeq_curated <- unlist(lapply(strsplit(G_list$refseq_mrna, "_"), function(x) {
+  x[[1]]
+})) == "NM"
+G_list <- G_list[G_list$RefSeq_curated, ]
+
+gslm <- split(G_list, G_list$external_gene_name)
+table(unlist(lapply(gslm, function(x) {
+  length(unique(x$strand))
+})))
+table(unlist(lapply(gslm, nrow)))
+
+
+## filter promoters
+filtered_promoters <- do.call("rbind", lapply(gslm, function(x) {
+  this_gene_strand <- as.character(unique(x$STRAND))
+  not_too_wide <- abs(max(x$transcription_start_site) - min(x$transcription_start_site)) < 200
+  only_one_strand <- length(this_gene_strand) == 1
+  protein_coding <- unique(x$gene_biotype) == "protein_coding"
+
+  tss <- ifelse(this_gene_strand == "+", max(x$transcription_start_site), min(x$transcription_start_site))
+  tts <- ifelse(this_gene_strand == "+", x$transcript_end[which.max(x$transcription_start_site)], x$transcript_start[which.min(x$transcription_start_site)])
+  chr <- unique(x$chr)
+  refseq <- ifelse(this_gene_strand == "+", x$refseq_mrna[which.max(x$transcription_start_site)], x$refseq_mrna[which.min(x$transcription_start_site)])
+
+  START <- ifelse(this_gene_strand == "+", tss - 2000, tss - 8000)
+  END <- ifelse(this_gene_strand == "+", tss + 2000, tss + 2000)
+  long_enough <- abs(tts - tss) > 8000
+
+  if (sum(not_too_wide, only_one_strand, protein_coding, long_enough) == 4) {
+    data.frame(
+      chr = chr,
+      prom_reg_start = START,
+      prom_reg_end = END,
+      gene = refseq,
+      gene_symbol = unique(x$external_gene_name),
+      tss = tss,
+      strand = this_gene_strand,
+      start_position = START,
+      end_position = END,
+      stringsAsFactors = F
+    )
+  }
+}))
+promoters <- GRanges(
+  seqnames = Rle(as.character(filtered_promoters$chr)),
+  ranges = IRanges(as.numeric(filtered_promoters$prom_reg_start),
+    end = as.numeric(filtered_promoters$prom_reg_end),
+    names = seq(1, nrow(filtered_promoters))
+  ),
+  strand = Rle(rep("*", nrow(filtered_promoters)))
+)
+names(promoters) <- rownames(filtered_promoters)
+promoters$gene <- filtered_promoters$gene
+promoters$gene_symbol <- filtered_promoters$gene_symbol
+promoters$STRAND <- filtered_promoters$strand
+promoters$TSS <- filtered_promoters$tss
+
+ovlp <- findOverlaps(promoters, genes)
+
+mappings <- data.frame(
+  promoters = queryHits(ovlp),
+  gene_of_the_promoter_region = elementMetadata(promoters[queryHits(ovlp)])[, 2],
+  overlapping_genes_geneName = elementMetadata(genes[subjectHits(ovlp)])[, 2],
+  stringsAsFactors = FALSE
+)
+
+length(unique(mappings$gene_of_the_promoter_region))
+length(unique(mappings$promoters))
+
+length(unique(mappings$overlapping_genes_geneName))
+
+promoters_not_overlapping_other_genes <- unlist(lapply(
+  split(mappings, mappings$gene_of_the_promoter_region),
+  function(x) {
+    all(x$gene_of_the_promoter_region == x$overlapping_genes_geneName)
+  }
+))
+promoters_not_overlapping_other_genes <- promoters_not_overlapping_other_genes[which(promoters_not_overlapping_other_genes)]
+table(promoters_not_overlapping_other_genes)
+
+final_promoters <- promoters[which(names(promoters) %in% names(promoters_not_overlapping_other_genes))]
+
+
+rss_rs <- do.call("rbind", lapply(as.list(seq(1:length(final_promoters))), function(i) {
+  g <- final_promoters[i]
+  tss <- g$TSS
+  chr <- as.character(chrom(g))
+  gene <- names(g)
+  if (g$STRAND == "+") {
+    return(
+      data.frame(
+        chr = rep((chr), 101),
+        starts = seq(tss - 2000, tss + 8000, length.out = 101),
+        ends = seq(tss - 1901, tss + 8099, length.out = 101),
+        gene = rep(gene, 101)
+      )
+    )
+  } else {
+    return(
+      data.frame(
+        chr = rep((chr), 101),
+        starts = rev(seq(tss - 8099, tss + 1901, length.out = 101)),
+        ends = rev(seq(tss - 8000, tss + 2000, length.out = 101)),
+        gene = rep(gene, 101)
+      )
+    )
+  }
+}))
+
+
+
+PsDF <- GRanges(
+  seqnames = Rle(rss_rs$chr),
+  ranges = IRanges(as.numeric(rss_rs$starts),
+    end = as.numeric(rss_rs$ends),
+    names = seq(1, nrow(rss_rs))
+  ),
+  strand = Rle(rep("*", nrow(rss_rs)))
+)
+PsDF$gene <- (rss_rs$gene)
+length(final_promoters) == length(PsDF) / 101
+
+save(
+  final_promoters,
+  PsDF,
+  file = file.path(
+    objects,
+    "final_promoters_and_ranges.RData"
+  )
+)
+```
+
+
+We will also map the gene symbols to ensembl gene IDs (we will need it in the GO-term enrichment analysis).
+
+
+```{r}
+filt <- unique(PsDF$gene)
+
+ensg <- getBM(
+  attributes = c(
+    "refseq_mrna",
+    "external_gene_name",
+    "ensembl_gene_id"
+  ),
+  filters = c("external_gene_name"),
+  values = filt,
+  mart = ensembl
+)
+save(
+  ensg,
+  file = file.path(
+    objects,
+    "ENSEMBL_genes_for_Average_profiles.Rdata"
+  )
+)
+```
+
+
+Now we can assess the signal of modifications. First define a function that will sum up the signal in bins defined above.
+
+
+```{r defineGetSignalInBins}
+getSignalInBins <- function(bins, modification) {
+  PsDFvsX <- findOverlaps(bins, modification)
+  PsDFvsX_score <- split(modification$score[subjectHits(PsDFvsX)], queryHits(PsDFvsX))
+  PsDFvsX_score <- unlist(lapply(PsDFvsX_score, function(x) {
+    sum(x, na.rm = T)
+  }))
+
+  bm <- rep(0, length(PsDF))
+  bm[as.numeric(names(PsDFvsX_score))] <- PsDFvsX_score
+  bm <- matrix(bm, nrow = length(PsDF) / 101, ncol = 101, byrow = T)
+  rownames(bm) <- (PsDF$gene)[seq(1, length(PsDF), by = 101)]
+
+  return(bm)
+}
+```
+
+
+### K562 - encode data replicates treated separetly
+
+We consider encode data first, we analyze the two replicates separately.
+
+```{r}
+load(
+  file.path(
+    objects,
+    "ENSEMBL_genes_for_Average_profiles.Rdata"
+  )
+)
+load(
+  file.path(
+    objects,
+    "final_promoters_and_ranges.RData"
+  )
+)
+path <- file.path(
+  wig_dir,
+  "ENCFF547SYT.bigWig"
+)
+if (!file.exists(path)) {
+  download.file(
+    url = "https://www.encodeproject.org/files/ENCFF547SYT/@@download/ENCFF547SYT.bigWig",
+    destfile = path
+  )
+}
+me2_encode1 <- import(path)
+
+path <- file.path(
+  wig_dir,
+  "ENCFF564BZY.bigWig"
+)
+if (!file.exists(path)) {
+  download.file(
+    url = "https://www.encodeproject.org/files/ENCFF564BZY/@@download/ENCFF564BZY.bigWig",
+    destfile = path
+  )
+}
+me2_encode2 <- import(path)
+
+me2_encode1_pattern <- getSignalInBins(
+  PsDF,
+  me2_encode1
+)
+rm(me2_encode1)
+write.table(
+  me2_encode1_pattern,
+  file = file.path(
+    objects,
+    "ENCFF547SYT_geneMatrix.txt"
+  ),
+  sep = "\t",
+  quote = FALSE
+)
+
+me2_encode2_pattern <- getSignalInBins(
+  PsDF,
+  me2_encode2
+)
+rm(me2_encode2)
+write.table(
+  me2_encode2_pattern,
+  file = file.path(
+    objects,
+    "ENCFF564BZY_geneMatrix.txt"
+  ),
+  sep = "\t",
+  quote = FALSE
+)
+```
+
+
+### K562 - ThermoFisher antibody (710796)
+
+Here we process the bigwig profiles obtained with the antibody displaying the highest specificity according to Shah *et al.*, *Molecular Cell* 2018. We here consider data with no adjustments to show that they reproduce encode and they reproduce what the HMD showed in Shah et al., 2018.
+
+
+```{r}
+path <- file.path(
+  wig_dir,
+  "GSM2773400_AR16-5_TF-710796_mQ20_L200_genome_coverage.bigwig"
+)
+if (!file.exists(path)) {
+  getGEOSuppFiles(
+    "GSM2773400",
+    baseDir = wig_dir,
+    makeDirectory = FALSE,
+    filter_regex = "AR16-5_TF-710796_mQ20_L200_genome_coverage.bigwig"
+  )
+}
+me2_best <- import(path)
+
+me2_best_pattern <- getSignalInBins(
+  PsDF,
+  me2_best
+)
+rm(me2_best)
+write.table(
+  me2_best_pattern,
+  file = file.path(
+    objects,
+    "GSM2773400_AR16-5_TF-710796_mQ20_L200_genome_coverag_geneMatrix.txt"
+  ),
+  sep = "\t",
+  quote = FALSE
+)
+```
+
+
+### K562 - the abcam antibody
+
+Read the track files and perform the aggregation of signal. We also take the track from Shah et al., 2018 (GSE103543). 
+
+Both ENCODE and Shah **use the same antibody - *ab7766* ** (ENCODE ID: ENCAB000ANF).
+
+```{r}
+path <- file.path(
+  wig_dir,
+  "GSM2773397_AR16-3_AB-7766_mQ20_L200_genome_coverage.bigwig"
+)
+if (!file.exists(path)) {
+  getGEOSuppFiles(
+    "GSM2773397",
+    baseDir = wig_dir,
+    makeDirectory = FALSE,
+    filter_regex = "AR16-3_AB-7766_mQ20_L200_genome_coverage.bigwig"
+  )
+}
+me2_Shah <- import(path)
+
+me2_Shah_pattern <- getSignalInBins(
+  PsDF,
+  me2_Shah
+)
+rm(me2_Shah)
+write.table(
+  me2_Shah_pattern,
+  file = file.path(
+    objects,
+    "GGSM2773397_AR16-3_AB-7766_mQ20_L200_genome_coverage_geneMatrix.txt"
+  ),
+  sep = "\t",
+  quote = FALSE
+)
+
+path <- file.path(
+  wig_dir,
+  "ENCFF491AUC.bigWig"
+)
+if (!file.exists(path)) {
+  download.file(
+    url = "https://www.encodeproject.org/files/ENCFF491AUC/@@download/ENCFF491AUC.bigWig",
+    destfile = path
+  )
+}
+me2_encode_rep1_rep2 <- import(path)
+
+me2_encode_pattern <- getSignalInBins(
+  PsDF,
+  me2_encode_rep1_rep2
+)
+rm(me2_encode_rep1_rep2)
+write.table(
+  me2_encode_pattern,
+  file = file.path(
+    objects,
+    "ENCFF491AUC_geneMatrix.txt"
+  ),
+  sep = "\t",
+  quote = FALSE
+)
+```
+
+
+### K562 - the normalized file from Shah et al. for the antibody used by the ENCODE consortium
+
+
+```{r}
+path <- file.path(
+  wig_dir,
+  "GSM2773397_AR16-3_AB-7766_mQ20_L200_HMD.bigwig"
+)
+if (!file.exists(path)) {
+  getGEOSuppFiles(
+    "GSM2773397",
+    baseDir = wig_dir,
+    makeDirectory = FALSE,
+    filter_regex = "AR16-3_AB-7766_mQ20_L200_HMD.bigwig"
+  )
+}
+me2_HMD_ab7766 <- import(path)
+
+me2_HMD_ab7766_pattern <- getSignalInBins(
+  PsDF,
+  me2_HMD_ab7766
+)
+rm(me2_HMD_ab7766)
+write.table(
+  me2_HMD_ab7766_pattern,
+  file = file.path(
+    objects,
+    "GSM2773397_AR16-3_AB-7766_mQ20_L200_HMD_geneMatrix.txt"
+  ),
+  sep = "\t",
+  quote = FALSE
+)
+```
+
+### K562 - the normalized file from Shah et al.
+
+Here we will consider the normalized file *GSE103543_AR16_H3K4me2-Corrected_HMD.bedgraph*. K562 Antibody: ab7766
+
+```{r}
+load(
+  file.path(
+    objects,
+    "final_promoters_and_ranges.RData"
+  )
+)
+path <- file.path(
+  wig_dir,
+  "GSE103543_AR16_H3K4me2_Corrected_HMD.bigwig"
+)
+if (!file.exists(path)) {
+  options(timeout=2000)
+  getGEOSuppFiles(
+    "GSE103543",
+    baseDir = wig_dir,
+    makeDirectory = FALSE,
+    filter_regex = "AR16_H3K4me2_Corrected_HMD.bigwig"
+  )
+}
+me2_HMD <- import(path)
+me2_HMD_pattern <- getSignalInBins(
+  PsDF,
+  me2_HMD
+)
+rm(me2_HMD)
+write.table(
+  me2_HMD_pattern,
+  file = file.path(
+    objects,
+    "GSE103543_AR16_H3K4me2-Corrected_HMD_geneMatrix.txt"
+  ),
+  sep = "\t",
+  quote = FALSE
+)
+```
+
+
+
+### B cells
+
+Here the profiles were obtained using the ab7766 antibody.
+
+```{r}
+path <- file.path(
+  wig_dir,
+  "ENCFF945VIU.bigWig"
+)
+if (!file.exists(path)) {
+  download.file(
+    url = "https://www.encodeproject.org/files/ENCFF945VIU/@@download/ENCFF945VIU.bigWig",
+    destfile = path
+  )
+}
+me2_Bcell_rep1_rep2 <- import(path)
+
+me2_Bcell_pattern <- getSignalInBins(
+  PsDF,
+  me2_Bcell_rep1_rep2
+)
+rm(me2_Bcell_rep1_rep2)
+write.table(
+  me2_Bcell_pattern,
+  file = file.path(
+    objects,
+    "ENCFF945VIU_B_cell_rep1_rep2_geneMatrix.txt"
+  ),
+  sep = "\t",
+  quote = FALSE
+)
+```
+
+
+## Clustering and GO-term analysis of H3K4me2 gene patterns 
+
+
+Read the table and perform downstream clustering and GO-term analysis. We observed that in K562 a handful of genes displayed an unusually strong signal of H3K4me2. We will discard these genes from further analysis.
+
+## Filtering
+
+```{r, H3K4me2_pattern_data_filtering, fig.width=14, fig.height=12, out.width='70%', fig.align='center', dev.args=list(pointsize=24),fig.path=figures, dev=c('png', 'pdf')}
+load(
+  file.path(
+    objects,
+    "ENSEMBL_genes_for_Average_profiles.Rdata"
+  )
+)
+
+me2_Shah_pattern <- read.delim(
+  file = file.path(
+    objects,
+    "GGSM2773397_AR16-3_AB-7766_mQ20_L200_genome_coverage_geneMatrix.txt"
+  ),
+  as.is = TRUE,
+  header = TRUE
+)
+me2_best_pattern <- read.delim(
+  file = file.path(
+    objects,
+    "GSM2773400_AR16-5_TF-710796_mQ20_L200_genome_coverag_geneMatrix.txt"
+  ),
+  as.is = TRUE,
+  header = TRUE
+)
+me2_HMD_pattern <- read.delim(
+  file = file.path(
+    objects,
+    "GSE103543_AR16_H3K4me2-Corrected_HMD_geneMatrix.txt"
+  ),
+  as.is = TRUE,
+  header = TRUE
+)
+me2_HMD_ab7766_pattern <- read.delim(
+  file = file.path(
+    objects,
+    "GSM2773397_AR16-3_AB-7766_mQ20_L200_HMD_geneMatrix.txt"
+  ),
+  as.is = TRUE,
+  header = TRUE
+)
+me2_encode_pattern <- read.delim(
+  file = file.path(
+    objects,
+    "ENCFF491AUC_geneMatrix.txt"
+  ),
+  as.is = TRUE,
+  header = TRUE
+)
+me2_encode_pattern1 <- read.delim(
+  file = file.path(
+    objects,
+    "ENCFF547SYT_geneMatrix.txt"
+  ),
+  as.is = TRUE,
+  header = TRUE
+)
+me2_encode_pattern2 <- read.delim(
+  file = file.path(
+    objects,
+    "ENCFF564BZY_geneMatrix.txt"
+  ),
+  as.is = TRUE,
+  header = TRUE
+)
+
+thr_me2_Shah_pattern <- quantile(
+  rowSums(me2_Shah_pattern),
+  seq(
+    0,
+    1,
+    by = 0.001
+  )
+)[991]
+thr_me2_best_pattern <- quantile(
+  rowSums(me2_best_pattern),
+  seq(
+    0,
+    1,
+    by = 0.001
+  )
+)[991]
+thr_me2_HMD_pattern <- quantile(
+  rowSums(me2_HMD_pattern),
+  seq(
+    0,
+    1,
+    by = 0.001
+  )
+)[991]
+thr_me2_encode_pattern <- quantile(
+  rowSums(me2_encode_pattern),
+  seq(
+    0,
+    1,
+    by = 0.001
+  )
+)[991]
+thr_me2_encode_pattern1 <- quantile(
+  rowSums(me2_encode_pattern1),
+  seq(
+    0,
+    1,
+    by = 0.001
+  )
+)[991]
+thr_me2_encode_pattern2 <- quantile(
+  rowSums(me2_encode_pattern2),
+  seq(
+    0,
+    1,
+    by = 0.001
+  )
+)[991]
+
+par(
+  mfrow = c(3, 2),
+  mar = c(4, 4, 4, 1),
+  bty = "n"
+)
+plot(
+  density(rowSums(me2_Shah_pattern)),
+  main = "Shah et al., abcam",
+  xlab = "H3K4me2 integr. sig. (-2+8 kb TSS)",
+  lwd = 2,
+  col = "red4"
+)
+abline(
+  v = thr_me2_Shah_pattern,
+  lty = 2,
+  col = "gray"
+)
+plot(
+  density(rowSums(me2_best_pattern)),
+  main = "Shah et al., Thermo",
+  xlab = "H3K4me2 integr. sig. (-2+8 kb TSS)",
+  lwd = 2,
+  col = "red4"
+)
+abline(
+  v = thr_me2_best_pattern,
+  lty = 2,
+  col = "gray"
+)
+plot(
+  density(rowSums(me2_HMD_pattern)),
+  main = "Shah et al., HMD",
+  xlab = "H3K4me2 integr. sig. (-2+8 kb TSS)",
+  lwd = 2,
+  col = "red4"
+)
+abline(
+  v = thr_me2_HMD_pattern,
+  lty = 2,
+  col = "gray"
+)
+plot(
+  density(rowSums(me2_encode_pattern)),
+  main = "Encode reps pooled",
+  xlab = "H3K4me2 integr. sig. (-2+8 kb TSS)",
+  lwd = 2,
+  col = "red4"
+)
+abline(
+  v = thr_me2_encode_pattern,
+  lty = 2,
+  col = "gray"
+)
+plot(
+  density(rowSums(me2_encode_pattern1)),
+  main = "Encode rep1",
+  xlab = "H3K4me2 integr. sig. (-2+8 kb TSS)",
+  lwd = 2,
+  col = "red4"
+)
+abline(
+  v = thr_me2_encode_pattern1,
+  lty = 2,
+  col = "gray"
+)
+plot(
+  density(rowSums(me2_encode_pattern2)),
+  main = "Encode rep2",
+  xlab = "H3K4me2 integr. sig. (-2+8 kb TSS)",
+  lwd = 2,
+  col = "red4"
+)
+abline(
+  v = thr_me2_encode_pattern2,
+  lty = 2,
+  col = "gray"
+)
+```
+
+
+
+Hereby, we identify genes for further clustering. We essentially removed 126 loci from further consideration.
+
+
+
+```{r}
+
+genes_2_remove <- unique(c(
+  rownames(me2_Shah_pattern)[rowSums(me2_Shah_pattern) > thr_me2_Shah_pattern],
+  rownames(me2_best_pattern)[rowSums(me2_best_pattern) > thr_me2_best_pattern],
+  rownames(me2_HMD_pattern)[rowSums(me2_HMD_pattern) > thr_me2_HMD_pattern],
+  rownames(me2_encode_pattern2)[rowSums(me2_encode_pattern2) > thr_me2_encode_pattern2]
+))
+
+length(genes_2_remove)
+```
+
+
+Get the profiles for the relevant loci. 
+
+
+```{r}
+
+me2_Shah_pattern <- me2_Shah_pattern[!rownames(me2_Shah_pattern) %in% genes_2_remove, ]
+me2_best_pattern <- me2_best_pattern[!rownames(me2_best_pattern) %in% genes_2_remove, ]
+me2_HMD_pattern <- me2_HMD_pattern[!rownames(me2_HMD_pattern) %in% genes_2_remove, ]
+me2_HMD_ab7766_pattern <- me2_HMD_ab7766_pattern[!rownames(me2_HMD_ab7766_pattern) %in% genes_2_remove, ]
+me2_encode_pattern <- me2_encode_pattern[!rownames(me2_encode_pattern) %in% genes_2_remove, ]
+me2_encode_pattern1 <- me2_encode_pattern1[!rownames(me2_encode_pattern1) %in% genes_2_remove, ]
+me2_encode_pattern2 <- me2_encode_pattern2[!rownames(me2_encode_pattern2) %in% genes_2_remove, ]
+
+save(
+  me2_Shah_pattern,
+  me2_best_pattern,
+  me2_HMD_pattern,
+  me2_encode_pattern,
+  me2_encode_pattern1,
+  me2_encode_pattern2,
+  file = file.path(
+    objects,
+    "H3K4me2_profiles_filtered.RData"
+  )
+)
+```
+
+
+### K562 - Shah data, abcam antibody
+
+First the uncorrected values
+
+```{r}
+load(
+  file.path(
+    objects,
+    "H3K4me2_profiles_filtered.RData"
+  )
+)
+
+clusters_Shah <- kmeans(
+  me2_Shah_pattern,
+  5,
+  100
+)
+genes <- rownames(me2_Shah_pattern)
+table(clusters_Shah$cluster)
+
+save(clusters_Shah, genes,
+  me2_Shah_pattern,
+  file = file.path(
+    objects,
+    "Shah_H3K4me2_clustering.RData"
+  )
+)
+```
+
+
+Plot the average profiles of the five clusters.
+
+
+```{r, Shah_me2_clustering, fig.width=12, fig.height=10, out.width='50%', fig.align='center', dev.args=list(pointsize=24),fig.path=figures, dev=c('png', 'pdf')}
+load(
+  file.path(
+    objects,
+    "Shah_H3K4me2_clustering.RData"
+  )
+)
+table(clusters_Shah$cluster)
+
+cols <- c("black", "red", "gray", "blue", "orange")
+par(
+  bty = "n",
+  mar = c(5, 5, 3, 1)
+)
+plot(
+  x = seq(-2000, 8000, by = 100),
+  colMeans(me2_Shah_pattern[which(clusters_Shah$cluster == 1), ]),
+  ty = "l", col = cols[1], lwd = 5, ylim = c(0, 1500), main = "H3K4me2 Shah ab7766",
+  ylab = "H3K4me2 signal", xlab = "Distance from TSS (bp)"
+)
+lines(
+  x = seq(-2000, 8000, by = 100),
+  colMeans(me2_Shah_pattern[which(clusters_Shah$cluster == 2), ]),
+  col = cols[2], lwd = 5
+)
+lines(
+  x = seq(-2000, 8000, by = 100),
+  colMeans(me2_Shah_pattern[which(clusters_Shah$cluster == 3), ]),
+  col = cols[3], lwd = 5
+)
+lines(
+  x = seq(-2000, 8000, by = 100),
+  colMeans(me2_Shah_pattern[which(clusters_Shah$cluster == 4), ]),
+  col = cols[4], lwd = 5
+)
+lines(
+  x = seq(-2000, 8000, by = 100),
+  colMeans(me2_Shah_pattern[which(clusters_Shah$cluster == 5), ]),
+  col = cols[5], lwd = 5
+)
+
+legend(
+  x = 4000,
+  y = 1500,
+  paste("Cluster", 1:5),
+  bty = "n",
+  col = cols,
+  lwd = 3
+)
+```
+
+
+
+### K562 - Shah data - ThermoFisher antibody
+
+
+```{r}
+load(
+  file.path(
+    objects,
+    "H3K4me2_profiles_filtered.RData"
+  )
+)
+clusters_best <- kmeans(
+  me2_best_pattern,
+  5,
+  100
+)
+genes <- rownames(me2_best_pattern)
+save(
+  me2_best_pattern, genes,
+  clusters_best,
+  file = file.path(
+    objects,
+    "Shah_Thermo_H3K4me2_clustering.RData"
+  )
+)
+```
+
+
+Plot the average profiles of the five clusters.
+
+
+```{r, Shah_thermo, fig.width=12, fig.height=10, out.width='50%', fig.align='center', dev.args=list(pointsize=24),fig.path=figures, dev=c('png', 'pdf')}
+
+load(file.path(objects, "Shah_Thermo_H3K4me2_clustering.RData"))
+table(clusters_best$cluster)
+cols <- c("black", "red", "gray", "blue", "orange")
+
+par(bty = "n", mar = c(5, 5, 3, 1))
+plot(
+  x = seq(-2000, 8000, by = 100),
+  colMeans(me2_best_pattern[which(clusters_best$cluster == 1), ]),
+  ty = "l", col = cols[1], lwd = 5, ylim = c(0, 2000),
+  main = "H3K4me2 Shah ThermoFisher",
+  ylab = "H3K4me2 signal", xlab = "Distance from TSS (bp)"
+)
+lines(
+  x = seq(-2000, 8000, by = 100),
+  colMeans(me2_best_pattern[which(clusters_best$cluster == 2), ]),
+  col = cols[2], lwd = 5
+)
+lines(
+  x = seq(-2000, 8000, by = 100),
+  colMeans(me2_best_pattern[which(clusters_best$cluster == 3), ]),
+  col = cols[3], lwd = 5
+)
+lines(
+  x = seq(-2000, 8000, by = 100),
+  colMeans(me2_best_pattern[which(clusters_best$cluster == 4), ]),
+  col = cols[4], lwd = 5
+)
+lines(
+  x = seq(-2000, 8000, by = 100),
+  colMeans(me2_best_pattern[which(clusters_best$cluster == 5), ]),
+  col = cols[5], lwd = 5
+)
+
+legend(
+  x = 4000, y = 2000, paste("Cluster", 1:5), bty = "n",
+  col = c("black", "red", "gray", "blue", "orange"), lwd = 3
+)
+```
+
+
+### K562 - Shah data - normalized final H3K4me2 file (HMD)
+
+```{r}
+clusters_HMD <- kmeans(
+  me2_HMD_pattern,
+  5,
+  50
+)
+genes <- rownames(me2_HMD_pattern)
+save(
+  clusters_HMD,
+  genes,
+  me2_HMD_pattern,
+  file = file.path(
+    objects,
+    "H3K4me2_HMD_clustering.RData"
+  )
+)
+```
+
+
+Plot the average profiles of the five clusters.
+
+
+```{r, Shah_normalized_HMD_all, fig.width=12, fig.height=10, out.width='50%', fig.align='center', dev.args=list(pointsize=24),fig.path=figures, dev=c('png', 'pdf')}
+
+load(file.path(objects, "H3K4me2_HMD_clustering.RData"))
+table(clusters_HMD$cluster)
+cols <- c("black", "red", "gray", "blue", "orange")
+
+par(bty = "n", mar = c(5, 5, 3, 1))
+plot(
+  x = seq(-2000, 8000, by = 100),
+  colMeans(me2_HMD_pattern[which(clusters_HMD$cluster == 1), ]),
+  ty = "l", col = cols[1], lwd = 5, ylim = c(0, 4000), main = "H3K4me2 HMD file",
+  ylab = "H3K4me2 signal", xlab = "Distance from TSS (bp)"
+)
+lines(
+  x = seq(-2000, 8000, by = 100),
+  colMeans(me2_HMD_pattern[which(clusters_HMD$cluster == 2), ]),
+  col = cols[2], lwd = 5
+)
+lines(
+  x = seq(-2000, 8000, by = 100),
+  colMeans(me2_HMD_pattern[which(clusters_HMD$cluster == 3), ]),
+  col = cols[3], lwd = 5
+)
+lines(
+  x = seq(-2000, 8000, by = 100),
+  colMeans(me2_HMD_pattern[which(clusters_HMD$cluster == 4), ]),
+  col = cols[4], lwd = 5
+)
+lines(
+  x = seq(-2000, 8000, by = 100),
+  colMeans(me2_HMD_pattern[which(clusters_HMD$cluster == 5), ]),
+  col = cols[5], lwd = 5
+)
+
+legend(
+  x = 4000, y = 4000, paste("Cluster", 1:5), bty = "n",
+  col = c("black", "red", "gray", "blue", "orange"), lwd = 3
+)
+```
+
+
+### K562 - Shah data - normalized  H3K4me2 file (HMD) for the best antibody
+
+```{r}
+clusters_HMD_ab7766 <- kmeans(
+  me2_HMD_ab7766_pattern,
+  5,
+  50
+)
+genes <- rownames(me2_HMD_ab7766_pattern)
+save(clusters_HMD_ab7766,
+  genes,
+  me2_HMD_ab7766_pattern,
+  file = file.path(
+    objects,
+    "H3K4me2_HMD_clustering_ab7766.RData"
+  )
+)
+```
+
+
+Plot the average profiles of the five clusters.
+
+
+```{r, Shah_normalized_ab_7766, fig.width=12, fig.height=10, out.width='50%', fig.align='center', dev.args=list(pointsize=24),fig.path=figures, dev=c('png', 'pdf')}
+load(
+  file.path(
+    objects,
+    "H3K4me2_HMD_clustering_ab7766.RData"
+  )
+)
+table(clusters_HMD$cluster)
+cols <- c("black", "red", "gray", "blue", "orange")
+
+par(bty = "n", mar = c(5, 5, 3, 1))
+plot(
+  x = seq(-2000, 8000, by = 100),
+  colMeans(me2_HMD_ab7766_pattern[which(clusters_HMD_ab7766$cluster == 1), ]),
+  ty = "l", col = cols[1], lwd = 5, ylim = c(0, 4000), main = "H3K4me2 HMD ab7766",
+  ylab = "H3K4me2 signal", xlab = "Distance from TSS (bp)"
+)
+lines(
+  x = seq(-2000, 8000, by = 100),
+  colMeans(me2_HMD_ab7766_pattern[which(clusters_HMD_ab7766$cluster == 2), ]),
+  col = cols[2], lwd = 5
+)
+lines(
+  x = seq(-2000, 8000, by = 100),
+  colMeans(me2_HMD_ab7766_pattern[which(clusters_HMD_ab7766$cluster == 3), ]),
+  col = cols[3], lwd = 5
+)
+lines(
+  x = seq(-2000, 8000, by = 100),
+  colMeans(me2_HMD_ab7766_pattern[which(clusters_HMD_ab7766$cluster == 4), ]),
+  col = cols[4], lwd = 5
+)
+lines(
+  x = seq(-2000, 8000, by = 100),
+  colMeans(me2_HMD_ab7766_pattern[which(clusters_HMD_ab7766$cluster == 5), ]),
+  col = cols[5], lwd = 5
+)
+
+legend(
+  x = 4000, y = 4000, paste("Cluster", 1:5), bty = "n",
+  col = c("black", "red", "gray", "blue", "orange"), lwd = 3
+)
+```
+
+### ENCODE data K562 
+
+Both replicates
+
+```{r}
+clusters_encode <- kmeans(
+  me2_encode_pattern,
+  5,
+  50
+)
+genes <- rownames(me2_encode_pattern)
+save(
+  clusters_encode,
+  genes,
+  me2_encode_pattern,
+  file = file.path(
+    objects,
+    "Encode_H3K4me2_clustering.RData"
+  )
+)
+```
+
+```{r, ENCODE_Rep1ll, fig.width=12, fig.height=10, out.width='50%', fig.align='center', dev.args=list(pointsize=24),fig.path=figures, dev=c('png', 'pdf')}
+load(
+  file.path(
+    objects,
+    "Encode_H3K4me2_clustering.RData"
+  )
+)
+table(clusters_encode$cluster)
+cols <- c("black", "red", "gray", "blue", "orange")
+
+par(bty = "n", mar = c(5, 5, 3, 1))
+plot(
+  x = seq(-2000, 8000, by = 100),
+  colMeans(me2_encode_pattern[which(clusters_encode$cluster == 1), ]),
+  ty = "l", col = cols[1], lwd = 5, ylim = c(0, 2500), main = "H3K4me2 ENCODE file (rep1 and rep2)",
+  ylab = "H3K4me2 signal", xlab = "Distance from TSS (bp)"
+)
+lines(
+  x = seq(-2000, 8000, by = 100),
+  colMeans(me2_encode_pattern[which(clusters_encode$cluster == 2), ]),
+  col = cols[2], lwd = 5
+)
+lines(
+  x = seq(-2000, 8000, by = 100),
+  colMeans(me2_encode_pattern[which(clusters_encode$cluster == 3), ]),
+  col = cols[3], lwd = 5
+)
+lines(
+  x = seq(-2000, 8000, by = 100),
+  colMeans(me2_encode_pattern[which(clusters_encode$cluster == 4), ]),
+  col = cols[4], lwd = 5
+)
+lines(
+  x = seq(-2000, 8000, by = 100),
+  colMeans(me2_encode_pattern[which(clusters_encode$cluster == 5), ]),
+  col = cols[5], lwd = 5
+)
+
+legend(
+  x = 4000, y = 2500, paste("Cluster", 1:5), bty = "n",
+  col = c("black", "red", "gray", "blue", "orange"), lwd = 3
+)
+```
+
+Replicate 2.
+
+```{r}
+clusters_encode2 <- kmeans(
+  me2_encode_pattern2,
+  5,
+  50
+)
+genes <- rownames(me2_encode_pattern2)
+save(
+  clusters_encode2,
+  genes,
+  me2_encode_pattern2,
+  file = file.path(
+    objects,
+    "Encode_rep2_H3K4me2_clustering.RData"
+  )
+)
+```
+
+```{r, ENCODE_Rep2, fig.width=12, fig.height=10, out.width='50%', fig.align='center', dev.args=list(pointsize=24),fig.path=figures, dev=c('png', 'pdf')}
+load(
+  file.path(
+    objects,
+    "Encode_rep2_H3K4me2_clustering.RData"
+  )
+)
+table(clusters_encode2$cluster)
+cols <- c(
+  "black",
+  "red",
+  "gray",
+  "blue",
+  "orange"
+)
+par(
+  bty = "n",
+  mar = c(5, 5, 3, 1)
+)
+plot(
+  x = seq(-2000, 8000, by = 100),
+  colMeans(me2_encode_pattern2[which(clusters_encode2$cluster == 1), ]),
+  ty = "l",
+  col = cols[1],
+  lwd = 5,
+  ylim = c(0, 1000),
+  main = "H3K4me2 ENCODE file Replicate 2",
+  ylab = "H3K4me2 signal",
+  xlab = "Distance from TSS (bp)"
+)
+lines(
+  x = seq(-2000, 8000, by = 100),
+  colMeans(me2_encode_pattern2[which(clusters_encode2$cluster == 2), ]),
+  col = cols[2],
+  lwd = 5
+)
+lines(
+  x = seq(-2000, 8000, by = 100),
+  colMeans(me2_encode_pattern2[which(clusters_encode2$cluster == 3), ]),
+  col = cols[3],
+  lwd = 5
+)
+lines(
+  x = seq(-2000, 8000, by = 100),
+  colMeans(me2_encode_pattern2[which(clusters_encode2$cluster == 4), ]),
+  col = cols[4],
+  lwd = 5
+)
+lines(
+  x = seq(-2000, 8000, by = 100),
+  colMeans(me2_encode_pattern2[which(clusters_encode2$cluster == 5), ]),
+  col = cols[5],
+  lwd = 5
+)
+
+
+legend(
+  x = 4000,
+  y = 800,
+  paste("Cluster", 1:5),
+  bty = "n",
+  col = c("black", "red", "gray", "blue", "orange"),
+  lwd = 3
+)
+```
+
+
+### B cell - encode data
+
+```{r}
+clusters_bcell <- kmeans(
+  me2_Bcell_pattern,
+  5,
+  100
+)
+genes <- rownames(me2_Bcell_pattern)
+save(
+  clusters_bcell,
+  genes,
+  me2_Bcell_pattern,
+  file = file.path(
+    objects,
+    "Bcell_H3K4me2_clustering.RData"
+  )
+)
+```
+
+Plot the average profiles of the five clusters.
+
+```{r, ENCODE_Bcells, fig.width=12, fig.height=10, out.width='50%', fig.align='center', dev.args=list(pointsize=24),fig.path=figures, dev=c('png', 'pdf')}
+load(
+  file.path(
+    objects,
+    "Bcell_H3K4me2_clustering.RData"
+  )
+)
+table(clusters_encode2$cluster)
+cols <- c("black", "red", "gray", "blue", "orange")
+
+
+par(bty = "n", mar = c(5, 5, 3, 1))
+plot(
+  x = seq(-2000, 8000, by = 100),
+  colMeans(me2_Bcell_pattern[which(clusters_bcell$cluster == 1), ]),
+  ty = "l", col = cols[1], lwd = 5, ylim = c(0, 2500), main = "H3K4me2 Encode - B cell",
+  ylab = "H3K4me2 signal", xlab = "Distance from TSS (bp)"
+)
+lines(
+  x = seq(-2000, 8000, by = 100),
+  colMeans(me2_Bcell_pattern[which(clusters_bcell$cluster == 2), ]),
+  col = cols[2], lwd = 5
+)
+lines(
+  x = seq(-2000, 8000, by = 100),
+  colMeans(me2_Bcell_pattern[which(clusters_bcell$cluster == 3), ]),
+  col = cols[3], lwd = 5
+)
+lines(
+  x = seq(-2000, 8000, by = 100),
+  colMeans(me2_Bcell_pattern[which(clusters_bcell$cluster == 4), ]),
+  col = cols[4], lwd = 5
+)
+lines(
+  x = seq(-2000, 8000, by = 100),
+  colMeans(me2_Bcell_pattern[which(clusters_bcell$cluster == 5), ]),
+  col = cols[5], lwd = 5
+)
+
+legend(
+  x = 4000, y = 2500, paste("Cluster", 1:5), bty = "n",
+  col = c("black", "red", "gray", "blue", "orange"), lwd = 3
+)
+```
+
+## Analysis of chosen GO terms
+
+We will compute P-values (Fisher) testing for the enrichment for the 4 main GO categories in the clustering of all the profiles.
+
+```{r}
+
+go_terms <- c(
+  multicellular_organismal_process = "GO:0032501",
+  developmental_process = "GO:0032502",
+  metabolic_process = "GO:0008152",
+  cellular_process = "GO:0009987"
+)
+
+
+create_results_table <- function(
+  clustering_res,
+  pattern,
+  clusterID,
+  ENSG,
+  GO_terms
+) {
+  ## clustering_res=clusters_Shah; pattern=me2_HMD_pattern;clusterID=1;GO_terms=go_terms;ENSG=ensg
+  ## unique identifiers
+  ENSG <- ENSG[!duplicated(ENSG$external_gene_name), ]
+  ## universe and selection
+  inUniverse <- rownames(pattern)
+  inUniverse <- ENSG[ENSG$external_gene_name %in% inUniverse, "ensembl_gene_id"]
+  inSelection <- names(clustering_res$cluster[which(clustering_res$cluster == clusterID)])
+  inSelection <- ENSG[ENSG$external_gene_name %in% inSelection, "ensembl_gene_id"]
+
+  alg <- factor(as.integer(inUniverse %in% inSelection))
+  names(alg) <- inUniverse
+
+  tgd <- new(
+    "topGOdata",
+    ontology = "BP",
+    allGenes = alg,
+    nodeSize = 10,
+    annot = annFUN.org,
+    mapping = "org.Hs.eg.db",
+    ID = "ensembl"
+  )
+
+  resultTopGO.classic <- runTest(tgd, algorithm = "classic", statistic = "Fisher")@score
+  if (length(GO_terms) > 0) {
+    return(resultTopGO.classic[names(resultTopGO.classic) %in% GO_terms])
+  }
+  if (length(GO_terms) == 0) {
+    return(resultTopGO.classic)
+  }
+}
+```
+
+
+
+```{r focusClusterHigh}
+
+load(file.path(objects, "ENSEMBL_genes_for_Average_profiles.Rdata")) #
+load(file.path(objects, "H3K4me2_profiles_filtered.RData")) #
+load(file.path(objects, "Shah_H3K4me2_clustering.RData"))
+load(file.path(objects, "Shah_Thermo_H3K4me2_clustering.RData"))
+load(file.path(objects, "H3K4me2_HMD_clustering.RData")) #
+load(file.path(objects, "Encode_H3K4me2_clustering.RData")) #
+load(file.path(objects, "Encode_rep2_H3K4me2_clustering.RData")) #
+load(file.path(objects, "Bcell_H3K4me2_clustering.RData")) #
+
+cluster_choice <- list()
+
+# Depending on seed, the "High" cluster may change.
+# Here we select it based on the median value by cluster
+# in the 100th bin (could be also done for other bins in 3').
+findClusterHigh <- function(
+  clustering_res,
+  pattern 
+) {
+  med_signal_3p <- list()
+  for (n_cluster in unique(clustering_res$cluster)) {
+    med_signal_3p[[n_cluster]] <- median(
+      pattern[
+        clustering_res$cluster == n_cluster,
+        100
+      ]
+    )
+  }
+  which.max(med_signal_3p)
+}
+
+cluster_choice <- list(
+  me2_Shah_pattern = findClusterHigh(
+    clustering_res = clusters_Shah,
+    pattern = me2_Shah_pattern
+  ),
+  me2_best_pattern = findClusterHigh(
+    clustering_res = clusters_best,
+    pattern = me2_best_pattern
+  ),
+  me2_HMD_pattern = findClusterHigh(
+    clustering_res = clusters_HMD,
+    pattern = me2_HMD_pattern
+  ),
+  me2_HMD_ab7766_pattern = findClusterHigh(
+    clustering_res = clusters_HMD_ab7766,
+    pattern = me2_HMD_ab7766_pattern
+  ),
+  me2_encode_pattern2 = findClusterHigh(
+    clustering_res = clusters_encode2,
+    pattern = me2_encode_pattern2
+  ),
+  me2_Bcell_pattern = findClusterHigh(
+  clustering_res = clusters_bcell,
+  pattern = me2_Bcell_pattern
+  )
+)
+
+
+# cluster_choice <- c(
+#   me2_Shah_pattern = 1,
+#   me2_best_pattern = 5,
+#   me2_HMD_pattern = 2,
+#   me2_HMD_ab7766_pattern = 3,
+#   me2_encode_pattern = 4,
+#   me2_encode_pattern2 = 3,
+#   me2_Bcell_pattern = 1
+# )
+
+
+shah_table_high <- create_results_table(
+  clustering_res = clusters_Shah,
+  pattern = me2_Shah_pattern,
+  clusterID = cluster_choice$me2_Shah_pattern,
+  ENSG = ensg,
+  GO_terms = c()
+)
+
+
+shah_bestAb <- create_results_table(
+  clustering_res = clusters_best,
+  pattern = me2_best_pattern,
+  clusterID = cluster_choice$me2_best_pattern,
+  ENSG = ensg,
+  GO_terms = c()
+)
+
+
+HMD_Shah <- create_results_table(
+  clustering_res = clusters_HMD,
+  pattern = me2_HMD_pattern,
+  clusterID = cluster_choice$me2_HMD_pattern,
+  ENSG = ensg,
+  GO_terms = c()
+)
+
+HMD_Shah_ab7766 <- create_results_table(
+  clustering_res = clusters_HMD_ab7766,
+  pattern = me2_HMD_ab7766_pattern,
+  clusterID = cluster_choice$me2_HMD_ab7766_pattern,
+  ENSG = ensg,
+  GO_terms = c()
+)
+
+encode_table2 <- create_results_table(
+  clustering_res = clusters_encode2,
+  pattern = me2_encode_pattern2,
+  clusterID = cluster_choice$me2_encode_pattern2,
+  ENSG = ensg,
+  GO_terms = c()
+)
+
+Bcell_table <- create_results_table(
+  clustering_res = clusters_bcell,
+  pattern = me2_Bcell_pattern,
+  clusterID = cluster_choice$me2_Bcell_pattern,
+  ENSG = ensg,
+  GO_terms = c()
+)
+
+## -----------------------------------------------
+
+getGOnames <- function(id_list, mappings) {
+  # id_list=shah_table_high; mappings=goterms
+  x <- as.data.frame(id_list)
+  colnames(x) <- "P-val"
+  x$GO_name <- mappings[match(rownames(x), names(mappings))]
+  x <- x[order(x[, 1], decreasing = FALSE), ]
+  return(x)
+}
+
+
+shah_table_high <- getGOnames(shah_table_high, goterms)
+shah_bestAb <- getGOnames(shah_bestAb, goterms)
+HMD_Shah <- getGOnames(HMD_Shah, goterms)
+HMD_ab776_Shah <- getGOnames(HMD_Shah_ab7766, goterms)
+encode_table2 <- getGOnames(encode_table2, goterms)
+Bcell_table <- getGOnames(Bcell_table, goterms)
+
+write.table(shah_table_high, file = file.path(objects, "shah_table_high.txt"), quote = F, sep = "\t")
+write.table(shah_bestAb, file = file.path(objects, "shah_bestAb_high.txt"), quote = F, sep = "\t")
+write.table(HMD_Shah, file = file.path(objects, "HMD_Shah_high.txt"), quote = F, sep = "\t")
+write.table(encode_table2, file = file.path(objects, "encode_table2_high.txt"), quote = F, sep = "\t")
+write.table(Bcell_table, file = file.path(objects, "Bcell_table_high.txt"), quote = F, sep = "\t")
+```
+
+
+Using terms identified as within the top 4 terms in at least one sample, retrieve the P-values in all the other samples
+
+
+```{r, FigureS1_panelB_GO, fig.width=8, fig.height=8, out.width='50%', fig.align='center', dev.args=list(pointsize=15),fig.path=figures, dev=c('png', 'pdf')}
+
+
+load(file.path(objects, "ENSEMBL_genes_for_Average_profiles.Rdata"))
+load(file.path(objects, "H3K4me2_profiles_filtered.RData"))
+
+shah_table_high <- read.delim(file.path(objects, "shah_table_high.txt"), as.is = TRUE)
+shah_bestAb <- read.delim(file.path(objects, "shah_bestAb_high.txt"), as.is = TRUE)
+HMD_Shah <- read.delim(file.path(objects, "HMD_Shah_high.txt"), as.is = TRUE)
+encode_table2 <- read.delim(file.path(objects, "encode_table2_high.txt"), as.is = TRUE)
+Bcell_table <- read.delim(file.path(objects, "Bcell_table_high.txt"), as.is = TRUE)
+
+getTopGO <- function(tb, topTerms) {
+  # tb=HMD_Shah; topTerms=4
+  tbb <- tb[1:topTerms, ]
+  res <- rownames(tbb)
+  names(res) <- tbb[, "GO_name"]
+  return(res)
+}
+
+
+cluster_choice
+
+go_termsII <- (c(
+  getTopGO(HMD_Shah, 4),
+  getTopGO(shah_bestAb, 4),
+  getTopGO(encode_table2, 4),
+  getTopGO(Bcell_table, 4)
+))
+
+go_termsII <- go_termsII[!duplicated(names(go_termsII))]
+
+
+shah_bestAb <- create_results_table(
+  clustering_res = clusters_best,
+  pattern = me2_best_pattern,
+  clusterID = cluster_choice$me2_best_pattern,
+  ENSG = ensg,
+  GO_terms = go_termsII
+)
+
+
+HMD_Shah <- create_results_table(
+  clustering_res = clusters_HMD,
+  pattern = me2_HMD_pattern,
+  clusterID = cluster_choice$me2_HMD_pattern,
+  ENSG = ensg,
+  GO_terms = go_termsII
+)
+
+
+
+encode_table2 <- create_results_table(
+  clustering_res = clusters_encode2,
+  pattern = me2_encode_pattern2,
+  clusterID = cluster_choice$me2_encode_pattern2,
+  ENSG = ensg,
+  GO_terms = go_termsII
+)
+
+
+Bcell_table <- create_results_table(
+  clustering_res = clusters_bcell,
+  pattern = me2_Bcell_pattern,
+  clusterID = cluster_choice$me2_Bcell_pattern,
+  ENSG = ensg,
+  GO_terms = go_termsII
+)
+
+
+
+
+getGOnames <- function(id_list, mappings) {
+  # id_list=Bcell_table; mappings=goterms
+  x <- as.data.frame(id_list)
+  colnames(x) <- "P-val"
+  x$GO_name <- mappings[match(rownames(x), names(mappings))]
+  return(x)
+}
+
+
+shah_bestAb1 <- getGOnames(shah_bestAb, goterms)
+HMD_Shah1 <- getGOnames(HMD_Shah, goterms)
+encode_table21 <- getGOnames(encode_table2, goterms)
+Bcell_table1 <- getGOnames(Bcell_table, goterms)
+
+orderGO <- c(
+  "regulation of viral transcription", "cellular protein metabolic process",
+  "chromosome organization",
+  "macromolecule catabolic process",
+  "regulation of gene expression, epigenetic",
+  "cellular macromolecule catabolic process",
+  "hematopoietic or lymphoid organ development",
+  "immune system development", "immune system process"
+)
+orderGO <- rev(orderGO)
+
+resMatrix <- cbind(
+  Shah_Thermo = shah_bestAb1[match(orderGO, shah_bestAb1$GO_name), 1],
+  HMD_Shah1 = HMD_Shah1[match(orderGO, HMD_Shah1$GO_name), 1],
+  encode_table21 = encode_table21[match(orderGO, encode_table21$GO_name), 1],
+  Bcell_table1 = Bcell_table1[match(orderGO, Bcell_table1$GO_name), 1]
+)
+rownames(resMatrix) <- orderGO
+
+resMatrix_cut <- matrix(
+  cut(
+    as.numeric(-log10(resMatrix)),
+    c(1:14),
+    labels = FALSE
+  ),
+  nrow = nrow(resMatrix),
+  ncol = ncol(resMatrix),
+  byrow = FALSE
+)
+rownames(resMatrix_cut) <- rownames(resMatrix)
+colnames(resMatrix_cut) <- colnames(resMatrix)
+
+
+par(mar = c(10, 25, 1, 1), mfrow = c(1, 1))
+image(1:4, 1:nrow(resMatrix_cut),
+  t(resMatrix_cut),
+  axes = FALSE, xlab = "", ylab = "",
+  col = colorRampPalette(c("white", "red"))(12)
+)
+box(col = "black", lwd = 2)
+axis(1,
+  at = 1:4, c(
+    "Shah et al., Thermo",
+    "Shah et al., HMD",
+    "Encode K562", "Encode B cell"
+  ),
+  las = 2
+)
+axis(2,
+  at = 1:nrow(resMatrix_cut),
+  rownames(resMatrix_cut), las = 1
+)
+box(col = "black")
+```
+
+And the color scale.
+
+```{r,FigureS1_panelB_GO_colorScale, fig.width=8, fig.height=8, out.width='50%', fig.align='center', dev.args=list(pointsize=15),fig.path=figures, dev=c('png', 'pdf')}
+par(mar = c(15, 4, 15, 1))
+image(0:length(c(1:14)), 0:1,
+  matrix(c(1:14)),
+  axes = FALSE, xlab = "", ylab = "",
+  col = colorRampPalette(c("white", "red"))(12)
+)
+box(col = "black", lwd = 2)
+axis(1, at = c(1:14))
+```

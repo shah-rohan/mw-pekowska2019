@@ -1,0 +1,28 @@
+name:
+  r_rmd_pekowska2019_orgdb_v3.5
+channels:
+  - conda-forge
+  - bioconda
+  - defaults
+dependencies:
+  - bioconductor-org.hs.eg.db == 3.5
+  # - bioconductor-clusterprofiler
+  # - bioconductor-complexheatmap
+  # - r-reshape2
+  # - r-circlize
+  - r-biocmanager
+  - r-rmarkdown
+  - r-bookdown
+  - pandoc=1.19 #requirement to render R Markdown.
+  - r-codetools #requirement to avoid error after first R chunk during R Markdown rendering.
+  - bioconductor-geoquery
+  - bioconductor-rtracklayer
+  - bioconductor-biomart
+  - bioconductor-ensdb.hsapiens.v86
+  - bioconductor-topgo
+  - r-data.table
+  - bioconductor-gviz
+  - r-stringr
+  - r-venndiagram
+  - bioconductor-go.db
+  - bioconductor-ensembldb
