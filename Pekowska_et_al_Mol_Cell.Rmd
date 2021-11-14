@@ -2856,8 +2856,6 @@ shah_table_high <- create_results_table(
   ENSG = ensg,
   GO_terms = c()
 )
-
-
 shah_bestAb <- create_results_table(
   clustering_res = clusters_best,
   pattern = me2_best_pattern,
@@ -2865,8 +2863,6 @@ shah_bestAb <- create_results_table(
   ENSG = ensg,
   GO_terms = c()
 )
-
-
 HMD_Shah <- create_results_table(
   clustering_res = clusters_HMD,
   pattern = me2_HMD_pattern,
@@ -2874,7 +2870,6 @@ HMD_Shah <- create_results_table(
   ENSG = ensg,
   GO_terms = c()
 )
-
 HMD_Shah_ab7766 <- create_results_table(
   clustering_res = clusters_HMD_ab7766,
   pattern = me2_HMD_ab7766_pattern,
@@ -2882,7 +2877,6 @@ HMD_Shah_ab7766 <- create_results_table(
   ENSG = ensg,
   GO_terms = c()
 )
-
 encode_table2 <- create_results_table(
   clustering_res = clusters_encode2,
   pattern = me2_encode_pattern2,
@@ -2890,7 +2884,6 @@ encode_table2 <- create_results_table(
   ENSG = ensg,
   GO_terms = c()
 )
-
 Bcell_table <- create_results_table(
   clustering_res = clusters_bcell,
   pattern = me2_Bcell_pattern,
@@ -2918,11 +2911,60 @@ HMD_ab776_Shah <- getGOnames(HMD_Shah_ab7766, goterms)
 encode_table2 <- getGOnames(encode_table2, goterms)
 Bcell_table <- getGOnames(Bcell_table, goterms)
 
-write.table(shah_table_high, file = file.path(objects, "shah_table_high.txt"), quote = F, sep = "\t")
-write.table(shah_bestAb, file = file.path(objects, "shah_bestAb_high.txt"), quote = F, sep = "\t")
-write.table(HMD_Shah, file = file.path(objects, "HMD_Shah_high.txt"), quote = F, sep = "\t")
-write.table(encode_table2, file = file.path(objects, "encode_table2_high.txt"), quote = F, sep = "\t")
-write.table(Bcell_table, file = file.path(objects, "Bcell_table_high.txt"), quote = F, sep = "\t")
+write.table(
+  shah_table_high,
+  file = file.path(
+    objects,
+    "shah_table_high.txt"
+  ),
+  quote = FALSE,
+  sep = "\t"
+)
+write.table(
+  shah_bestAb,
+  file = file.path(
+    objects,
+    "shah_bestAb_high.txt"
+  ),
+  quote = FALSE,
+  sep = "\t"
+)
+write.table(
+  HMD_Shah,
+  file = file.path(
+    objects,
+    "HMD_Shah_high.txt"
+  ),
+  quote = FALSE,
+  sep = "\t"
+)
+write.table(
+  HMD_ab776_Shah,
+  file = file.path(
+    objects,
+    "HMD_ab776_Shah_highGO.txt"
+  ),
+  quote = FALSE,
+  sep = "\t"
+)
+write.table(
+  encode_table2,
+  file = file.path(
+    objects,
+    "encode_table2_high.txt"
+  ),
+  quote = FALSE,
+  sep = "\t"
+)
+write.table(
+  Bcell_table,
+  file = file.path(
+    objects,
+    "Bcell_table_high.txt"
+  ),
+  quote = FALSE,
+  sep = "\t"
+)
 ```
 
 
@@ -2964,6 +3006,13 @@ HMD_Shah <- read.delim(
   ),
   as.is = TRUE
 )
+HMD_ab776_Shah <- read.delim(
+  file.path(
+    objects,
+    "HMD_ab776_Shah_highGO.txt"
+  ),
+  as.is = TRUE
+)
 encode_table2 <- read.delim(
   file.path(
     objects,
@@ -2978,6 +3027,15 @@ Bcell_table <- read.delim(
   ),
   as.is = TRUE
 )
+HMD_ab776_Shah <- read.delim(
+  file.path(
+    objects,
+    'HMD_ab776_Shah_highGO.txt'
+  ),
+  as.is = TRUE
+)
+
+
 
 getTopGO <- function(tb, topTerms) {
   # tb=HMD_Shah; topTerms=4
@@ -2987,16 +3045,24 @@ getTopGO <- function(tb, topTerms) {
   return(res)
 }
 
-go_termsII <- (c(
-  getTopGO(HMD_Shah, 4),
-  getTopGO(shah_bestAb, 4),
-  getTopGO(encode_table2, 4),
-  getTopGO(Bcell_table, 4)
-))
+go_termsII <- c(
+  getTopGO(shah_table_high,4),
+  getTopGO(HMD_Shah,4),
+  getTopGO(shah_bestAb,4), 
+  getTopGO(encode_table2,4),
+  getTopGO(HMD_ab776_Shah,4),
+  getTopGO(Bcell_table,4)
+)
 
 go_termsII <- go_termsII[!duplicated(names(go_termsII))]
 
-
+shah_abcam <- create_results_table(
+  clustering_res = clusters_Shah,
+  pattern = me2_Shah_pattern,
+  clusterID = cluster_choice$me2_Shah_pattern,
+  ENSG = ensg,
+  GO_terms = go_termsII
+)
 shah_bestAb <- create_results_table(
   clustering_res = clusters_best,
   pattern = me2_best_pattern,
@@ -3004,8 +3070,6 @@ shah_bestAb <- create_results_table(
   ENSG = ensg,
   GO_terms = go_termsII
 )
-
-
 HMD_Shah <- create_results_table(
   clustering_res = clusters_HMD,
   pattern = me2_HMD_pattern,
@@ -3013,7 +3077,13 @@ HMD_Shah <- create_results_table(
   ENSG = ensg,
   GO_terms = go_termsII
 )
-
+HMD_ab7766_Shah <- create_results_table(
+  clustering_res = clusters_HMD_ab7766,
+  pattern = me2_HMD_ab7766_pattern,
+  clusterID = cluster_choice$me2_HMD_ab7766_pattern,
+  ENSG = ensg,
+  GO_terms = go_termsII
+)
 encode_table2 <- create_results_table(
   clustering_res = clusters_encode2,
   pattern = me2_encode_pattern2,
@@ -3021,7 +3091,6 @@ encode_table2 <- create_results_table(
   ENSG = ensg,
   GO_terms = go_termsII
 )
-
 Bcell_table <- create_results_table(
   clustering_res = clusters_bcell,
   pattern = me2_Bcell_pattern,
@@ -3038,25 +3107,54 @@ getGOnames <- function(id_list, mappings) {
   return(x)
 }
 
-shah_bestAb1 <- getGOnames(shah_bestAb, goterms)
-HMD_Shah1 <- getGOnames(HMD_Shah, goterms)
-encode_table21 <- getGOnames(encode_table2, goterms)
-Bcell_table1 <- getGOnames(Bcell_table, goterms)
-
-orderGO <- c(
-  "regulation of viral transcription", "cellular protein metabolic process",
-  "chromosome organization",
-  "macromolecule catabolic process",
-  "regulation of gene expression, epigenetic",
-  "cellular macromolecule catabolic process",
-  "hematopoietic or lymphoid organ development",
-  "immune system development", "immune system process"
+shah_bestAb1 = getGOnames(
+  shah_bestAb,
+  goterms
+) #thermo
+ab7766_Shah1 = getGOnames(
+  shah_abcam,
+  goterms
+) #abcam 
+HMD_ab7766_Shah1 = getGOnames(
+  HMD_ab7766_Shah,
+  goterms
+) #abcam HMD
+HMD_Shah1 = getGOnames(
+  HMD_Shah,
+  goterms
+) #all ab HMD
+encode_table21 = getGOnames(
+  encode_table2,
+  goterms
+)# encode replicate 2
+Bcell_table1 = getGOnames(
+  Bcell_table,
+  goterms
 )
-orderGO <- rev(orderGO)
+
+orderGO <- names(go_termsII)
+
+# These are the GO terms enriched when compiled using Aleks R environment.
+# They slightly differ from those we get using more recent ontologies.
+# orderGO = c(
+#   "viral transcription",
+#   "macromolecule catabolic process",
+#   "cellular protein catabolic process",
+#   "cellular macromolecule catabolic process",
+#   "regulation of gene expression, epigenetic",
+#   "chromosome organization",
+#   "hematopoietic or lymphoid organ development",
+#   "lymphocyte activation",
+#   "immune system development",
+#   "immune system process"
+# )
+# orderGO <- rev(orderGO)
 
 resMatrix <- cbind(
   Shah_Thermo = shah_bestAb1[match(orderGO, shah_bestAb1$GO_name), 1],
   HMD_Shah1 = HMD_Shah1[match(orderGO, HMD_Shah1$GO_name), 1],
+  Shah_abcam = ab7766_Shah1[ match(orderGO,ab7766_Shah1$GO_name) ,1 ],
+  HMD_ab7766_Shah1 = HMD_ab7766_Shah1[ match(orderGO,HMD_ab7766_Shah1$GO_name) ,1 ],
   encode_table21 = encode_table21[match(orderGO, encode_table21$GO_name), 1],
   Bcell_table1 = Bcell_table1[match(orderGO, Bcell_table1$GO_name), 1]
 )
@@ -3065,7 +3163,7 @@ rownames(resMatrix) <- orderGO
 resMatrix_cut <- matrix(
   cut(
     as.numeric(-log10(resMatrix)),
-    c(1:14),
+    c(0:16),
     labels = FALSE
   ),
   nrow = nrow(resMatrix),
@@ -3077,11 +3175,11 @@ colnames(resMatrix_cut) <- colnames(resMatrix)
 
 
 par(
-  mar = c(10, 25, 1, 1),
+  mar = c(15, 25, 1, 1),
   mfrow = c(1, 1)
 )
 image(
-  1:4,
+  1:6,
   1:nrow(resMatrix_cut),
   t(resMatrix_cut),
   axes = FALSE,
@@ -3095,10 +3193,12 @@ box(
 )
 axis(
   1,
-  at = 1:4,
+  at = 1:6,
   c(
     "Shah et al., Thermo",
     "Shah et al., HMD",
+    "Shah et al., ab7766",
+    "Shah et al., ab7766 HMD",
     "Encode K562", "Encode B cell"
   ),
   las = 2
