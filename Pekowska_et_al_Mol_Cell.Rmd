@@ -140,26 +140,6 @@ if (!file.exists(path)) {
     destfile = path
   )
 }
-
-getGEOSuppFiles(
-  "GSM1480325",
-  baseDir = wig_dir,
-  makeDirectory = FALSE,
-  filter_regex = "bigWig"
-)
-
-path <- file.path(
-  wig_dir,
-  "GSM2773406_AR16-4_TF-PA5-40086_mQ20_L200_HMD.bigwig"
-)
-if (!file.exists(path)) {
-  getGEOSuppFiles(
-    "GSM2773406",
-    baseDir = wig_dir,
-    makeDirectory = FALSE,
-    filter_regex = "AR16-4_TF-PA5-40086_mQ20_L200_HMD.bigwig"
-  )
-}
 ```
 
 # Gene annotation
@@ -249,7 +229,7 @@ readBed_filterChroms <- function(
         end = as.numeric(x[, 3]),
         names = rownames(x)
       ),
-      score = x[, scoreCol]
+      #score = x[, scoreCol]
     )
   )
 }
@@ -274,6 +254,75 @@ pol <- readBed_filterChroms(
     "ENCFF516BJP_optimal_idr_thresholded_peaks_reps_1_and_2.bed.gz"
   )
 )
+```
+
+NEW FROM RNS: Now we add custom filters:
+
+```{r custom_filters}
+
+chia <- readBed_filterChroms(
+  file.path(
+    "filters",
+    "enhancers_chia.bed"
+  )
+)
+
+faire <- readBed_filterChroms(
+  file.path(
+    "filters",
+    "FAIRE_lifted_ENCFF001UYS.bed"
+  )
+)
+
+k27ac <- readBed_filterChroms(
+  file.path(
+    "filters",
+    "H3K27ac_lifted_ENCFF002EMT.bed"
+  )
+)
+
+grotss <- readBed_filterChroms(
+  file.path(
+    "filters",
+    "K562_all_tss_lifted.bed"
+  )
+)
+
+tfbs <- readBed_filterChroms(
+  file.path(
+    "filters",
+    "K562_TFBS.bed"
+  )
+)
+
+p300 <- readBed_filterChroms(
+  file.path(
+    "filters",
+    "P300_ENCFF020TYZ.bed"
+  )
+)
+
+atac <- readBed_filterChroms(
+  file.path(
+    "filters",
+    "scATAC_lifted_GSE65360.bed"
+  )
+)
+
+mitranscriptome_hg19 <- readBed_filterChroms(
+  file.path(
+    "filters",
+    "mitranscriptome_hg19.bed"
+  )
+)
+
+fantom_hg19 <- readBed_filterChroms(
+  file.path(
+    "filters",
+    "fantom5_permissive_phase1_2_hg19.bed"
+  )
+)
+
 ```
 
 ## Identification of enhancers
@@ -335,7 +384,9 @@ distal_enhancers <- enhancers[-unique(queryHits(findOverlaps(enhancers, genes)))
 ```
 
 
-Now we have 9155 elements to consider. Export bed to execute the "lift-over" to *Hg19* using ucsc.
+Now we have 9155 elements to consider. 
+
+Export bed to execute the "lift-over" to *Hg19* using ucsc.
 
 ```{r displayDistalEnhancers}
 distal_enhancers
@@ -386,6 +437,74 @@ distal_enhancers_hg19 = unlist(
 # distal_enhancers_hg19 <- readBed_filterChroms(paste0(objects, "distal_enhancers_GRCh37.bed"),
 #   chroms = paste0("chr", c(1:22, "X", "Y")), 5
 # )
+```
+
+NEW BY RNS:
+
+We will now examine the overlap of these 9155 elements with H3K4me3. We will then determine how many of them would be filtered out by our other filtering files.
+
+```{r me3enhancers}
+
+peakoverlap <- function(source_peaks, query_peaks)
+{
+  return(source_peaks[unique(queryHits(findOverlaps(source_peaks, query_peaks)))])
+}
+
+hg19ToHg38_chain <- loadChainFromUcsc(conversion = "hg19ToHg38")
+
+mitranscriptome_hg38 = unlist(
+  liftOver(
+    mitranscriptome_hg19, 
+    chain = hg19ToHg38_chain
+  )
+)
+
+fantom_hg38 = unlist(
+  liftOver(
+    fantom_hg19, 
+    chain = hg19ToHg38_chain
+  )
+)
+
+distal_enhancers_me3 <- peakoverlap(distal_enhancers, me3_peaks) # 646 regions
+distal_enhancers_me3_TSS <- peakoverlap(distal_enhancers_me3, grotss) # 506 regions
+distal_enhancers_me3_TSS_H3K27ac <- peakoverlap(distal_enhancers_me3_TSS, k27ac) # 498 regions
+distal_enhancers_me3_TSS_H3K27ac_P300 <- peakoverlap(distal_enhancers_me3_TSS_H3K27ac, p300) # 411 regions
+distal_enhancers_me3_TSS_H3K27ac_P300_ATAC <- peakoverlap(distal_enhancers_me3_TSS_H3K27ac_P300, atac) # 323 regions
+distal_enhancers_me3_TSS_H3K27ac_P300_ATAC_FAIRE <- peakoverlap(distal_enhancers_me3_TSS_H3K27ac_P300_ATAC, faire) # 309 regions
+distal_enhancers_me3_TSS_H3K27ac_P300_ATAC_FAIRE_chia <- peakoverlap(distal_enhancers_me3_TSS_H3K27ac_P300_ATAC_FAIRE, chia) # 190 regions
+distal_enhancers_me3_TSS_H3K27ac_P300_ATAC_FAIRE_chia_TFBS <- peakoverlap(distal_enhancers_me3_TSS_H3K27ac_P300_ATAC_FAIRE_chia, tfbs) # 18 regions
+
+# Iyer lncRNA overlap
+
+distal_enhancers_me3_TSS_H3K27ac_P300_ATAC_FAIRE_chia_TFBS_notIyerlncRNAs <- distal_enhancers_me3_TSS_H3K27ac_P300_ATAC_FAIRE_chia_TFBS[-unique(queryHits(findOverlaps(distal_enhancers_me3_TSS_H3K27ac_P300_ATAC_FAIRE_chia_TFBS, mitranscriptome_hg38)))] # 3 regions
+distal_enhancers_me3_TSS_H3K27ac_P300_ATAC_FAIRE_chia_notIyerlncRNAs <- distal_enhancers_me3_TSS_H3K27ac_P300_ATAC_FAIRE_chia[-unique(queryHits(findOverlaps(distal_enhancers_me3_TSS_H3K27ac_P300_ATAC_FAIRE_chia, mitranscriptome_hg38)))] # 46 regions
+
+# FANTOM5 enhancer overlap
+
+distal_enhancers_me3_TSS_H3K27ac_P300_ATAC_FAIRE_chia_TFBS_fantom <- peakoverlap(distal_enhancers_me3_TSS_H3K27ac_P300_ATAC_FAIRE_chia_TFBS, fantom_hg38) # 7 regions
+distal_enhancers_me3_TSS_H3K27ac_P300_ATAC_FAIRE_chia_fantom <- peakoverlap(distal_enhancers_me3_TSS_H3K27ac_P300_ATAC_FAIRE_chia, fantom_hg38) # 103 regions
+
+# Both
+distal_enhancers_me3_TSS_H3K27ac_P300_ATAC_FAIRE_chia_TFBS_notIyerlncRNAs_fantom <- peakoverlap(distal_enhancers_me3_TSS_H3K27ac_P300_ATAC_FAIRE_chia_TFBS_notIyerlncRNAs, fantom_hg38) # 1 region
+
+#Export everything
+
+listexport = function(gran, filename)
+{
+  export.bed(gran, con = file.path(objects, filename))
+}
+
+listexport(distal_enhancers, "distal_enhancers.bed")
+listexport(distal_enhancers_me3, "distal_enhancers_me3.bed")
+listexport(distal_enhancers_me3_TSS, "distal_enhancers_me3_TSS.bed")
+listexport(distal_enhancers_me3_TSS_H3K27ac, "distal_enhancers_me3_TSS_H3K27ac.bed")
+listexport(distal_enhancers_me3_TSS_H3K27ac_P300, "distal_enhancers_me3_TSS_H3K27ac_P300.bed")
+listexport(distal_enhancers_me3_TSS_H3K27ac_P300_ATAC, "distal_enhancers_me3_TSS_H3K27ac_P300_ATAC.bed")
+listexport(distal_enhancers_me3_TSS_H3K27ac_P300_ATAC_FAIRE, "distal_enhancers_me3_TSS_H3K27ac_P300_ATAC_FAIRE.bed")
+listexport(distal_enhancers_me3_TSS_H3K27ac_P300_ATAC_FAIRE_chia, "distal_enhancers_me3_TSS_H3K27ac_P300_ATAC_FAIRE_chia.bed")
+listexport(distal_enhancers_me3_TSS_H3K27ac_P300_ATAC_FAIRE_chia_TFBS, "distal_enhancers_me3_TSS_H3K27ac_P300_ATAC_FAIRE_chia_TFBS.bed")
+
 ```
 
 
